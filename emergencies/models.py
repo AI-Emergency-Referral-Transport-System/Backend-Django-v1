@@ -1,4 +1,4 @@
-from django.contrib.gis.db import models
+from django.db import models
 from django.conf import settings
 
 from common.models import TimestampedUUIDModel
@@ -32,7 +32,8 @@ class Emergency(TimestampedUUIDModel):
         related_name="emergencies",
     )
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.REQUESTED)
-    requested_location = models.PointField(geography=True, srid=4326, null=True, blank=True)
+    #requested_location = models.PointField(geography=True, srid=4326, null=True, blank=True)
+    requested_location = models.TextField(null=True, blank=True)
     summary = models.CharField(max_length=255, blank=True)
 
     class Meta:

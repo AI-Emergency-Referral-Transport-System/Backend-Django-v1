@@ -1,12 +1,10 @@
 from django.urls import path
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-
-from accounts.views import OTPRequestAPIView, UserListCreateAPIView
-
+from rest_framework_simplejwt.views import TokenRefreshView
+from .views import RegisterView, VerifyOTPView, UserProfileView
 
 urlpatterns = [
-    path("users/", UserListCreateAPIView.as_view(), name="user-list-create"),
-    path("otp/request/", OTPRequestAPIView.as_view(), name="otp-request"),
-    path("jwt/token/", TokenObtainPairView.as_view(), name="token-obtain-pair"),
+    path("register/", RegisterView.as_view(), name="register"),
+    path("verify-otp/", VerifyOTPView.as_view(), name="verify-otp"),
     path("jwt/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
+    path("profile/", UserProfileView.as_view(), name="user-profile"),
 ]

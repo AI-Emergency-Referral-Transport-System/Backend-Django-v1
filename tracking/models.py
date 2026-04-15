@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.contrib.gis.db import models
+from django.db import models
 
 from common.models import TimestampedUUIDModel
 
@@ -18,7 +18,8 @@ class LocationUpdate(TimestampedUUIDModel):
         related_name="reported_locations",
         limit_choices_to={"role": "driver"},
     )
-    location = models.PointField(geography=True, srid=4326)
+    #location = models.PointField(geography=True, srid=4326)
+    requested_location = models.TextField(null=True, blank=True)
     heading = models.FloatField(null=True, blank=True)
     speed = models.FloatField(null=True, blank=True)
     recorded_at = models.DateTimeField()
