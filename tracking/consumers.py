@@ -59,3 +59,28 @@ class AmbulanceTrackingConsumer(AsyncWebsocketConsumer):
             'lon': event['lon'],
             'emergency_id': self.emergency_id
         }))
+
+
+class HospitalNotificationConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        # Each hospital joins a group based on their unique ID
+        self.hospital_id = self.scope['url_route']['kwargs']['hospital_id']
+        self.group_name = f'hospital_{self.hospital_id}'
+
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def new_emergency_alert(self, event):
+        """
+        This is called when a patient is assigned to this hospital.
+        It sends a popup alert to the Hospital Dashboard.
+        """
+        await self.send(text_data=json.dumps({
+            "type": "NEW_EMERGENCY",
+            "emergency_id": event["emergency_id"],
+            "patient_name": event["patient_name"],
+            "eta": event.get("eta", "Calculating...")
+        }))
