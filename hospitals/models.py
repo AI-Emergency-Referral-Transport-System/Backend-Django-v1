@@ -23,7 +23,7 @@ class Hospital(TimestampedUUIDModel):
     )
     location = models.PointField(geography=True, srid=4326)
 
-    # Resource availability
+    
     available_beds = models.PositiveIntegerField(default=0)
     available_icu_beds = models.PositiveIntegerField(default=0)
     oxygen_level = models.CharField(
