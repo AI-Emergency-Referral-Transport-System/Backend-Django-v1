@@ -1,8 +1,8 @@
 from django.urls import re_path
-
-from tracking.consumers import TrackingConsumer
-
+from . import consumers
 
 websocket_urlpatterns = [
-    re_path(r"^ws/tracking/(?P<ambulance_id>[0-9a-f-]+)/$", TrackingConsumer.as_asgi()),
+    # Match the /ws/track/{emergency_id}/ requirement
+    re_path(r'ws/track/(?P<emergency_id>[^/]+)/$', consumers.AmbulanceTrackingConsumer.as_async()),
 ]
+
