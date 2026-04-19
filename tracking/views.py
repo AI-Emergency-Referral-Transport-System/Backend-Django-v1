@@ -19,11 +19,11 @@ class CreateEmergencyAPIView(APIView):
     """
     Only Patients can trigger a new emergency request.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated, RolePermission]
     allowed_roles = {User.Role.DRIVER, User.Role.PATIENT}
 
     @transaction.atomic
-    def post(self, request):
+    def post(self, request, hospital_id):
         lat = request.data.get('lat')
         lon = request.data.get('lon')
 
@@ -32,8 +32,7 @@ class CreateEmergencyAPIView(APIView):
 
         patient_coords = Point(float(lon), float(lat), srid=4326)
         
-        # Logic to select hospital (simplified for now)
-        hospital = Hospital.objects.first() 
+        hospital = Hospital.objects.get(id=hospital_id)
 
         # Using request.user (The actual authenticated patient)
         emergency = Emergency.objects.create(
@@ -62,6 +61,7 @@ class CreateEmergencyAPIView(APIView):
                         "emergency_id": str(emergency.id), # UUID friendly
                         "patient_lat": lat,
                         "patient_lon": lon,
+                        "emergency_data": serializer.data, # Send the full serialized data for convenience
                     }
                 }
             )

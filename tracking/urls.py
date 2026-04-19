@@ -4,7 +4,7 @@ from .views import CreateEmergencyAPIView, AcceptEmergencyAPIView, PickupPatient
 app_name = 'tracking'
 urlpatterns = [
     # path('nearest-hospitals/', views.find_nearest_hospitals, name='nearest_hospitals'),
-    path('api/accept-emergency/<int:ambulance_id>/<uuid:emergency_id>/', 
+    path('api/accept-emergency/<uuid:ambulance_id>/<uuid:emergency_id>/', 
          AcceptEmergencyAPIView.as_view(), name='accept_emergency'
     ),
     path('api/create-emergency/', CreateEmergencyAPIView.as_view(), name='create_emergency'),
