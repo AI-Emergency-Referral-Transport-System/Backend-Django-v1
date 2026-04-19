@@ -1,9 +1,11 @@
 import json
+import uuid
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.gis.geos import Point
 from .models import Location_Track
 from ambulances.models import Ambulance
+from emergencies.models import Emergency
 
 class AmbulanceTrackingConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -83,20 +85,27 @@ class DispatchConsumer(AsyncWebsocketConsumer):
 
 class HospitalNotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        # Each hospital joins a group based on their unique ID
+        # Extract hospital ID from URL
         self.hospital_id = self.scope['url_route']['kwargs']['hospital_id']
-        self.group_name = f'hospital_{self.hospital_id}'
-
-        await self.channel_layer.group_add(self.group_name, self.channel_name)
-        await self.accept()
+        
+        #  Validate UUID format to prevent malformed group names
+        try:
+            uuid.UUID(str(self.hospital_id))
+            self.group_name = f'hospital_{self.hospital_id}'
+            
+            await self.channel_layer.group_add(self.group_name, self.channel_name)
+            await self.accept()
+        except ValueError:
+            # Drop connection if the ID is not a valid UUID
+            await self.close()
 
     async def disconnect(self, close_code):
-        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        if hasattr(self, 'group_name'):
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def new_emergency_alert(self, event):
         """
-        This is called when a patient is assigned to this hospital.
-        It sends a popup alert to the Hospital Dashboard.
+        Receives notification from the backend when a patient is assigned.
         """
         await self.send(text_data=json.dumps({
             "type": "NEW_EMERGENCY",
@@ -104,3 +113,19 @@ class HospitalNotificationConsumer(AsyncWebsocketConsumer):
             "patient_name": event["patient_name"],
             "eta": event.get("eta", "Calculating...")
         }))
+
+    # Helper method used by AmbulanceTrackingConsumer (keep it robust)
+    @database_sync_to_async
+    def record_movement(self, lat, lon):
+        try:
+            emergency = Emergency.objects.get(id=self.emergency_id)
+           
+            pnt = Point(float(lon), float(lat), srid=4326)
+            
+            Location_Track.objects.create(
+                emergency=emergency,
+                ambulance=emergency.ambulance,
+                coordinates=pnt
+            )
+        except Exception:
+            pass
