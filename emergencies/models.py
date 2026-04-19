@@ -7,11 +7,10 @@ from common.models import TimestampedUUIDModel
 
 class Emergency(TimestampedUUIDModel):
     class Status(models.TextChoices):
-        REQUESTED = "requested", "Requested"
-        ASSIGNED = "assigned", "Assigned"
-        IN_PROGRESS = "in_progress", "In Progress"
-        COMPLETED = "completed", "Completed"
-        CANCELLED = "cancelled", "Cancelled"
+        PENDING = 'pending', 'Searching for Ambulance'
+        ACCEPTED = 'accepted', 'Ambulance En Route'
+        RETRIEVED = 'retrieved', 'Patient picked up'
+        DELIVERED = 'delivered', 'Patient delivered to hospital'
 
     class Priority(models.TextChoices):
         CRITICAL = "critical", "Critical"
@@ -25,14 +24,14 @@ class Emergency(TimestampedUUIDModel):
         related_name="emergencies",
         limit_choices_to={"role": "patient"},
     )
-    ambulance = models.ForeignKey(
+    assigned_ambulance = models.ForeignKey(
         "ambulances.Ambulance",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="emergencies",
     )
-    hospital = models.ForeignKey(
+    selected_hospital = models.ForeignKey(
         "hospitals.Hospital",
         on_delete=models.SET_NULL,
         null=True,
@@ -49,17 +48,14 @@ class Emergency(TimestampedUUIDModel):
     status = models.CharField(
         max_length=32,
         choices=Status.choices,
-        default=Status.REQUESTED,
+        default=Status.PENDING,
     )
 
     # Patient location at time of request (GeoDjango PointField for spatial queries)
-    requested_location = models.PointField(geography=True, srid=4326, null=True, blank=True)
+    patient_location = models.PointField(geography=True, srid=4326, null=True, blank=True)
 
     # Patient-supplied description sent to AI engine
     patient_description = models.TextField(blank=True)
-
-    # Ongoing notes by drivers/hospital admins
-    notes = models.TextField(blank=True)
 
     completed_at = models.DateTimeField(null=True, blank=True)
 
@@ -68,8 +64,3 @@ class Emergency(TimestampedUUIDModel):
 
     def __str__(self) -> str:
         return f"{self.patient_id} | {self.emergency_type} | {self.status}"
-
-    def mark_completed(self):
-        self.status = self.Status.COMPLETED
-        self.completed_at = timezone.now()
-        self.save(update_fields=["status", "completed_at"])

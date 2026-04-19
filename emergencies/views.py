@@ -15,10 +15,9 @@ from emergencies.serializers import (
 from hospitals.models import Hospital
 
 
-class EmergencyListCreateAPIView(generics.ListCreateAPIView):
+class EmergencyListAPIView(generics.ListCreateAPIView):
     """
     GET  /api/emergency/  — List emergencies (filtered by patient or role)
-    POST /api/emergency/  — Create a new emergency request (patient only)
     """
     serializer_class = EmergencySerializer
     permission_classes = [RolePermission]
@@ -31,10 +30,6 @@ class EmergencyListCreateAPIView(generics.ListCreateAPIView):
         if getattr(user, "role", None) == "patient":
             return qs.filter(patient=user)
         return qs
-
-    def perform_create(self, serializer):
-        serializer.save(patient=self.request.user, status=Emergency.Status.REQUESTED)
-
 
 class EmergencyDetailAPIView(generics.RetrieveAPIView):
     """
@@ -85,34 +80,6 @@ class EmergencySelectHospitalAPIView(APIView):
             {"detail": f"Hospital '{hospital.name}' selected. Awaiting approval."},
             status=status.HTTP_200_OK,
         )
-
-
-class EmergencyCancelAPIView(APIView):
-    """
-    POST /api/emergency/{id}/cancel/
-    Patient cancels their emergency request if it hasn't been completed yet.
-    """
-    permission_classes = [RolePermission]
-    allowed_roles = {"patient"}
-
-    def post(self, request, pk):
-        emergency = get_object_or_404(Emergency, id=pk, patient=request.user)
-
-        if emergency.status == Emergency.Status.COMPLETED:
-            return Response(
-                {"detail": "Cannot cancel a completed emergency."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if emergency.status == Emergency.Status.CANCELLED:
-            return Response(
-                {"detail": "Emergency is already cancelled."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        emergency.status = Emergency.Status.CANCELLED
-        emergency.save(update_fields=["status"])
-        return Response({"detail": "Emergency cancelled successfully."}, status=status.HTTP_200_OK)
-
 
 class EmergencyNotesUpdateAPIView(APIView):
     """

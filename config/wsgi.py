@@ -10,7 +10,7 @@ load_dotenv(BASE_DIR / ".env")
 
 os.environ.setdefault(
     "DJANGO_SETTINGS_MODULE",
-    os.getenv("DJANGO_SETTINGS_MODULE", "config.settings.dev"),
+    os.getenv("DJANGO_SETTINGS_MODULE", "config.settings"),
 )
 
 application = get_wsgi_application()
