@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.contrib.gis.measure import D 
 
 from common.permissions import RolePermission
 from emergencies.models import Emergency
@@ -47,11 +48,22 @@ class HospitalResourceUpdateAPIView(APIView):
 
     def put(self, request):
         hospital = get_object_or_404(Hospital, admin=request.user)
-        serializer = HospitalResourceUpdateSerializer(hospital, data=request.data)
+        serializer = HospitalResourceUpdateSerializer(hospital, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data, status=status.HTTP_200_OK)
 
+        hospital.refresh_from_db()
+
+        if hospital.available_beds <= 0 and hospital.available_icu_beds <= 0:
+            if hospital.is_available:
+                hospital.is_available = False
+                hospital.save(update_fields=["is_available"])
+        else:
+            if not hospital.is_available:
+                hospital.is_available = True
+                hospital.save(update_fields=["is_available"])
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class HospitalIncomingEmergenciesAPIView(APIView):
     """
@@ -150,7 +162,7 @@ class HospitalNearbyAPIView(APIView):
     """
     permission_classes = [RolePermission]
     allowed_roles = {"patient", "driver", "hospital_admin"}
-
+    
     def get(self, request):
         try:
             lat = float(request.query_params["lat"])
@@ -160,15 +172,25 @@ class HospitalNearbyAPIView(APIView):
                 {"detail": "Query params 'lat' and 'lng' are required and must be valid numbers."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        radius_km = float(request.query_params.get("radius", 20))
+        
+        radius_km = float(request.query_params.get('radius', 20))
         user_location = Point(lng, lat, srid=4326)
 
-        hospitals = (
-            Hospital.objects.filter(is_available=True)
-            .annotate(distance=Distance("location", user_location))
-            .filter(distance__lte=radius_km * 1000)  # Distance in metres
-            .order_by("distance")
-        )
+        hospitals = Hospital.objects.filter(
+                is_available=True,
+                location__distance_lte=(user_location, D(km=radius_km))
+            ).annotate(distance=Distance("location", user_location))
+        
+        if request.query_params.get("need_oxygen") == "true":
+            hospitals = hospitals.exclude(oxygen_level=Hospital.OxygenLevel.CRITICAL)
+        
+        hospitals = hospitals.order_by("distance")
+
+        if not hospitals.exists():
+            return Response({
+                "message": f"No hospitals with required resources found within {radius_km}km.",
+                "hospitals": []
+            }, status=status.HTTP_200_OK)
+        
         serializer = HospitalSerializer(hospitals, many=True)
         return Response(serializer.data)
