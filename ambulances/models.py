@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.db import models
+from django.contrib.gis.db import models
 from common.models import TimestampedUUIDModel
 
 class Ambulance(TimestampedUUIDModel):
@@ -9,21 +9,10 @@ class Ambulance(TimestampedUUIDModel):
         BUSY = "busy", "Busy"
         OFFLINE = "offline", "Offline"
 
-    class VehicleType(models.TextChoices):
-        BASIC = "basic", "Basic"
-        ADVANCED = "advanced", "Advanced"
-        NEONATAL = "neonatal", "Neonatal"
-
-    plate_number = models.CharField(max_length=20, unique=True) # Per PDF 
-    vehicle_type = models.CharField(
-        max_length=20, 
-        choices=VehicleType.choices, 
-        default=VehicleType.BASIC
-    )
-
+    plate_number = models.CharField(max_length=20, unique=True) 
     driver = models.OneToOneField(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE, # Per PDF 
+        on_delete=models.CASCADE,
         related_name="ambulance_profile",
     )
     hospital = models.ForeignKey(
@@ -34,29 +23,17 @@ class Ambulance(TimestampedUUIDModel):
         related_name="ambulances",
     )
 
-
-    latitude = models.FloatField(null=True, blank=True)
-    longitude = models.FloatField(null=True, blank=True)
+    current_location = models.PointField(srid=4326)
     last_location_update = models.DateTimeField(null=True, blank=True)
-
-    has_oxygen = models.BooleanField(default=True)
-    has_defibrillator = models.BooleanField(default=False)
-    equipment = models.JSONField(default=list) 
 
     status = models.CharField(
         max_length=32, 
         choices=Status.choices, 
         default=Status.AVAILABLE
     )
-    
-    verification_status = models.CharField(
-        max_length=20,
-        choices=[('pending', 'Pending'), ('approved', 'Approved'), ('rejected', 'Rejected')],
-        default='pending'
-    )
 
     class Meta:
         ordering = ["plate_number"]
 
     def __str__(self) -> str:
-        return f"{self.plate_number} ({self.vehicle_type})"
+        return f"{self.plate_number} ({self.status})"

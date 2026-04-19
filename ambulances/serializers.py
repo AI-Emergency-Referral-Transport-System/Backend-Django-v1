@@ -11,16 +11,12 @@ class AmbulanceSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "plate_number",  
-            "vehicle_type",  #  basic, advanced, or neonatal
             "driver",
             "driver_name",   # Helper for Flutter UI
             "hospital",
             "hospital_name", # Helper for Flutter UI
             "status",
-            "latitude",      # Required for Real-time tracking
-            "longitude",     #  Required for Real-time tracking
-            "has_oxygen",    #  AI Equipment tracking
-            "has_defibrillator",
+            "current_location", # Required for Real-time tracking
             "is_active",
             "created_at",
             "updated_at",
@@ -33,4 +29,4 @@ class AmbulanceStatusUpdateSerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = Ambulance
-        fields = ("status", "latitude", "longitude")
+        fields = ("status", "current_location")
