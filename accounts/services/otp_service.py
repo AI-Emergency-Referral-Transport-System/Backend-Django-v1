@@ -1,12 +1,13 @@
 import secrets
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from accounts.models import OTPCode, User
-from accounts.services.sms_service import send_sms
+from accounts.services.notification_service import send_otp_notification
 
 
 class OTPService:
@@ -29,10 +30,9 @@ class OTPService:
         otp.set_code(raw_code)
         otp.save()
 
-        send_sms(
-            phone_number=user.phone_number,
-            message=f"Your verification code is: {raw_code}. It expires in 5 minutes.",
-        )
+        send_otp_notification(user=user, otp_code=raw_code)
+        if settings.DEBUG and getattr(settings, "OTP_DEBUG_OUTPUT", True):
+            print(f"[OTP DEBUG] {user.phone_number}: {raw_code}")
         return otp
 
     @transaction.atomic

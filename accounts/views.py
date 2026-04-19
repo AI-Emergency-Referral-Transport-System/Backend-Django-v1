@@ -1,17 +1,12 @@
 from django.contrib.auth import get_user_model
-from rest_framework import generics, permissions, response, status
+from rest_framework import permissions, response, status
 from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.views import APIView
 
-from accounts.models import Profile
-from accounts.permissions import RolePermission
-from accounts.serializers import (
-    OTPRequestSerializer,
-    OTPVerifySerializer,
-    ProfileSerializer,
-    UserSerializer,
-)
+from accounts.profiles.serializers import ProfileSerializer
+from accounts.profiles.services import ensure_profile_bundle
+from accounts.serializers import OTPRequestSerializer, OTPVerifySerializer, UserSerializer
 from accounts.services.otp_service import OTPService
 
 
@@ -29,7 +24,7 @@ class OTPRequestAPIView(APIView):
             phone_number=serializer.validated_data["phone_number"],
             defaults={"role": User.Role.PATIENT},
         )
-        Profile.objects.get_or_create(user=user)
+        ensure_profile_bundle(user)
         OTPService().request_otp(user)
 
         return response.Response(
@@ -50,7 +45,7 @@ class OTPVerifyAPIView(APIView):
             raise ValidationError({"code": "Invalid or expired verification code."})
 
         OTPService().verify_otp(user=user, code=serializer.validated_data["code"])
-        profile, _ = Profile.objects.get_or_create(user=user)
+        profile = ensure_profile_bundle(user)
 
         refresh = RefreshToken.for_user(user)
         return response.Response(
@@ -62,17 +57,3 @@ class OTPVerifyAPIView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-
-
-class ProfileRetrieveUpdateAPIView(generics.RetrieveUpdateAPIView):
-    permission_classes = [permissions.IsAuthenticated, RolePermission]
-    serializer_class = ProfileSerializer
-    allowed_roles = {
-        User.Role.PATIENT,
-        User.Role.DRIVER,
-        User.Role.HOSPITAL_ADMIN,
-    }
-
-    def get_object(self):
-        profile, _ = Profile.objects.get_or_create(user=self.request.user)
-        return profile
