@@ -7,7 +7,7 @@ urlpatterns = [
     path('api/accept-emergency/<uuid:ambulance_id>/<uuid:emergency_id>/', 
          AcceptEmergencyAPIView.as_view(), name='accept_emergency'
     ),
-    path('api/create-emergency/', CreateEmergencyAPIView.as_view(), name='create_emergency'),
+    path('api/create-emergency/<uuid: hospital_id>/', CreateEmergencyAPIView.as_view(), name='create_emergency'),
     path('api/pickup-patient/<uuid:emergency_id>/', PickupPatientAPIView.as_view(), name='pickup_patient'),
     path('api/complete-mission/<uuid:emergency_id>/', CompleteMissionAPIView.as_view(), name='complete_mission'),
 ]
