@@ -3,7 +3,7 @@ from .models import Ambulance
 
 class AmbulanceSerializer(serializers.ModelSerializer):
     # We include nested fields so Flutter doesn't have to make extra API calls
-    driver_name = serializers.ReadOnlyField(source="driver.full_name")
+    driver_name = serializers.ReadOnlyField(source="driver.profile.full_name")
     hospital_name = serializers.ReadOnlyField(source="hospital.name")
 
     class Meta:
@@ -17,7 +17,6 @@ class AmbulanceSerializer(serializers.ModelSerializer):
             "hospital_name", # Helper for Flutter UI
             "status",
             "current_location", # Required for Real-time tracking
-            "is_active",
             "created_at",
             "updated_at",
         )

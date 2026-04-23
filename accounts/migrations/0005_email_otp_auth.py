@@ -10,6 +10,7 @@ def blank_identity_fields_to_null(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
+        ("accounts", "0004_driverprofile_hospitalprofile"),
         ("accounts", "0004_user_last_otp_sent"),
     ]
 

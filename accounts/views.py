@@ -1,20 +1,17 @@
 from django.contrib.auth import get_user_model
-from rest_framework import generics, permissions, response, status
+from rest_framework import permissions, response, status
 from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.views import APIView
 
-from accounts.models import Profile
-from accounts.permissions import RolePermission
-from accounts.serializers import (
-    OTPRequestSerializer,
-    OTPVerifySerializer,
-    ProfileSerializer,
-    UserSerializer,
-)
+from accounts.profiles.serializers import ProfileSerializer
+from accounts.profiles.services import ensure_profile_bundle
+from accounts.serializers import OTPRequestSerializer, OTPVerifySerializer, UserSerializer
 from accounts.services.otp_service import OTPService
 
+
 User = get_user_model()
+
 
 class AuthRootAPIView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -36,10 +33,6 @@ class AuthRootAPIView(APIView):
 
 
 class OTPRequestAPIView(APIView):
-    """
-    Handles signup and login by creating a user (if needed)
-    and sending a hashed OTP to their email address.
-    """
     permission_classes = [permissions.AllowAny]
 
     def post(self, request, *args, **kwargs):
@@ -50,39 +43,33 @@ class OTPRequestAPIView(APIView):
             email=serializer.validated_data["email"],
             defaults={"role": User.Role.PATIENT},
         )
-
-        Profile.objects.get_or_create(user=user)
-
+        profile = ensure_profile_bundle(user)
         OTPService().request_otp(user)
 
         return response.Response(
-            {"detail": "Verification code sent successfully."},
+            {
+                "detail": "Verification code sent successfully.",
+                "profile": ProfileSerializer(profile).data,
+            },
             status=status.HTTP_202_ACCEPTED,
         )
 
 
 class OTPVerifyAPIView(APIView):
-    """
-    Verifies the OTP and returns JWT Access/Refresh tokens along with user info.
-    """
     permission_classes = [permissions.AllowAny]
 
     def post(self, request, *args, **kwargs):
         serializer = OTPVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        email = serializer.validated_data["email"]
-        code = serializer.validated_data["code"]
-
-        user = User.objects.filter(email=email).first()
+        user = User.objects.filter(email=serializer.validated_data["email"]).first()
         if user is None:
             raise ValidationError({"code": "Invalid or expired verification code."})
 
-        OTPService().verify_otp(user=user, code=code)
+        OTPService().verify_otp(user=user, code=serializer.validated_data["code"])
+        profile = ensure_profile_bundle(user)
 
-        profile, _ = Profile.objects.get_or_create(user=user)
         refresh = RefreshToken.for_user(user)
-        
         return response.Response(
             {
                 "refresh": str(refresh),
@@ -92,23 +79,3 @@ class OTPVerifyAPIView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-
-
-class ProfileRetrieveUpdateAPIView(generics.RetrieveUpdateAPIView):
-    """
-    Allows authenticated users to view or update their specific profile.
-    """
-    permission_classes = [permissions.IsAuthenticated, RolePermission]
-    serializer_class = ProfileSerializer
-    
-    # These roles are allowed to access this view based on RolePermission
-    allowed_roles = {
-        User.Role.PATIENT,
-        User.Role.DRIVER,
-        User.Role.HOSPITAL_ADMIN,
-    }
-
-    def get_object(self):
-        # Always return the profile of the logged-in user
-        profile, _ = Profile.objects.get_or_create(user=self.request.user)
-        return profile

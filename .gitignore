@@ -14,3 +14,5 @@ dist/
 *.egg-info/
 .idea/
 .vscode/
+.deps
+account_profile_service

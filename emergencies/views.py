@@ -25,11 +25,14 @@ class EmergencyListAPIView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Emergency.objects.select_related("patient", "ambulance", "hospital")
-        # Patients only see their own emergencies
+        qs = Emergency.objects.select_related("patient", "assigned_ambulance", "selected_hospital")
         if getattr(user, "role", None) == "patient":
             return qs.filter(patient=user)
         return qs
+
+
+class EmergencyListCreateAPIView(EmergencyListAPIView):
+    pass
 
 class EmergencyDetailAPIView(generics.RetrieveAPIView):
     """
@@ -42,7 +45,7 @@ class EmergencyDetailAPIView(generics.RetrieveAPIView):
 
     def get_object(self):
         user = self.request.user
-        qs = Emergency.objects.select_related("patient", "ambulance", "hospital")
+        qs = Emergency.objects.select_related("patient", "assigned_ambulance", "selected_hospital")
         if getattr(user, "role", None) == "patient":
             qs = qs.filter(patient=user)
         return get_object_or_404(qs, id=self.kwargs["pk"])
@@ -60,9 +63,9 @@ class EmergencySelectHospitalAPIView(APIView):
     def post(self, request, pk):
         emergency = get_object_or_404(Emergency, id=pk, patient=request.user)
 
-        if emergency.status not in (Emergency.Status.REQUESTED, Emergency.Status.ASSIGNED):
+        if emergency.status not in (Emergency.Status.PENDING, Emergency.Status.ACCEPTED):
             return Response(
-                {"detail": "Hospital can only be selected while the emergency is in 'requested' or 'assigned' state."},
+                {"detail": "Hospital can only be selected while the emergency is pending or accepted."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -71,15 +74,23 @@ class EmergencySelectHospitalAPIView(APIView):
 
         hospital = get_object_or_404(Hospital, id=serializer.validated_data["hospital_id"], is_available=True)
 
-        # Immediately reassign the hospital
-        emergency.hospital = hospital
-        emergency.status = Emergency.Status.REQUESTED
-        emergency.save(update_fields=["hospital", "status"])
+        emergency.selected_hospital = hospital
+        emergency.save(update_fields=["selected_hospital"])
 
         return Response(
             {"detail": f"Hospital '{hospital.name}' selected. Awaiting approval."},
             status=status.HTTP_200_OK,
         )
+
+
+class EmergencyCancelAPIView(APIView):
+    permission_classes = [RolePermission]
+    allowed_roles = {"patient"}
+
+    def post(self, request, pk):
+        emergency = get_object_or_404(Emergency, id=pk, patient=request.user)
+        emergency.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 class EmergencyNotesUpdateAPIView(APIView):
     """
@@ -90,12 +101,9 @@ class EmergencyNotesUpdateAPIView(APIView):
     allowed_roles = {"driver", "hospital_admin"}
 
     def patch(self, request, pk):
-        emergency = get_object_or_404(
-            Emergency,
-            id=pk,
-            status__in=[Emergency.Status.ASSIGNED, Emergency.Status.IN_PROGRESS],
-        )
-        serializer = EmergencyNotesUpdateSerializer(emergency, data=request.data, partial=True)
+        emergency = get_object_or_404(Emergency, id=pk)
+        serializer = EmergencyNotesUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        emergency.patient_description = serializer.validated_data["patient_description"]
+        emergency.save(update_fields=["patient_description"])
+        return Response({"patient_description": emergency.patient_description}, status=status.HTTP_200_OK)

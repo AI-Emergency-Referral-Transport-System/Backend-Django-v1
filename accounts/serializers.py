@@ -1,13 +1,14 @@
 from rest_framework import serializers
 
-from accounts.models import Profile, User
+from accounts.profiles.serializers import (
+    DriverProfileSerializer,
+    HospitalProfileSerializer,
+    ProfileSerializer,
+    ProfileUserSerializer,
+)
 
 
-class UserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ("id", "email", "phone_number", "role", "is_verified")
-        read_only_fields = fields
+UserSerializer = ProfileUserSerializer
 
 
 class OTPRequestSerializer(serializers.Serializer):
@@ -37,18 +38,11 @@ class OTPVerifySerializer(serializers.Serializer):
         return code
 
 
-class ProfileSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True)
-
-    class Meta:
-        model = Profile
-        fields = (
-            "id",
-            "user",
-            "full_name",
-            "emergency_contact",
-            "blood_type",
-            "location",
-            "updated_at",
-        )
-        read_only_fields = ("id", "user", "updated_at")
+__all__ = [
+    "DriverProfileSerializer",
+    "HospitalProfileSerializer",
+    "OTPRequestSerializer",
+    "OTPVerifySerializer",
+    "ProfileSerializer",
+    "UserSerializer",
+]

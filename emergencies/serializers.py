@@ -5,21 +5,20 @@ from emergencies.models import Emergency
 
 
 class EmergencySerializer(serializers.ModelSerializer):
-    requested_location = GeometryField(required=False, allow_null=True)
+    patient_location = GeometryField(required=False, allow_null=True)
 
     class Meta:
         model = Emergency
         fields = (
             "id",
             "patient",
-            "ambulance",
-            "hospital",
+            "assigned_ambulance",
+            "selected_hospital",
             "emergency_type",
             "priority",
             "status",
-            "requested_location",
+            "patient_location",
             "patient_description",
-            "notes",
             "completed_at",
             "created_at",
             "updated_at",
@@ -28,10 +27,9 @@ class EmergencySerializer(serializers.ModelSerializer):
 
 
 class EmergencyDetailSerializer(serializers.ModelSerializer):
-    """Full read serializer with nested names for detail view."""
-    requested_location = GeometryField(required=False, allow_null=True)
-    patient_name = serializers.CharField(source="patient.name", read_only=True)
-    hospital_name = serializers.CharField(source="hospital.name", read_only=True, default=None)
+    patient_location = GeometryField(required=False, allow_null=True)
+    patient_name = serializers.CharField(source="patient.profile.full_name", read_only=True)
+    hospital_name = serializers.CharField(source="selected_hospital.name", read_only=True, default=None)
 
     class Meta:
         model = Emergency
@@ -39,15 +37,14 @@ class EmergencyDetailSerializer(serializers.ModelSerializer):
             "id",
             "patient",
             "patient_name",
-            "ambulance",
-            "hospital",
+            "assigned_ambulance",
+            "selected_hospital",
             "hospital_name",
             "emergency_type",
             "priority",
             "status",
-            "requested_location",
+            "patient_location",
             "patient_description",
-            "notes",
             "completed_at",
             "created_at",
             "updated_at",
@@ -60,9 +57,5 @@ class EmergencySelectHospitalSerializer(serializers.Serializer):
     hospital_id = serializers.UUIDField()
 
 
-class EmergencyNotesUpdateSerializer(serializers.ModelSerializer):
-    """Allows drivers and hospital admins to add/update notes on an emergency."""
-
-    class Meta:
-        model = Emergency
-        fields = ("notes",)
+class EmergencyNotesUpdateSerializer(serializers.Serializer):
+    patient_description = serializers.CharField()
