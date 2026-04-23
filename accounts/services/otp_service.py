@@ -1,23 +1,24 @@
 import secrets
 from datetime import timedelta
 
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from accounts.models import OTPCode, User
-from accounts.services.notification_service import send_otp_notification
+from accounts.services.email_service import send_otp_email
 
 
 class OTPService:
     expiry_window = timedelta(minutes=5)
     rate_limit_window = timedelta(minutes=10)
-    max_requests_per_window = 3
+    max_requests_per_window = 5
 
     def request_otp(self, user: User) -> OTPCode:
         if not user.is_active:
             raise PermissionDenied("User account is inactive.")
+        if not user.email:
+            raise ValidationError({"email": "A verified email address is required."})
 
         self._enforce_rate_limit(user)
         OTPCode.objects.filter(user=user, is_used=False).update(is_used=True)
@@ -30,13 +31,14 @@ class OTPService:
         otp.set_code(raw_code)
         otp.save()
 
-        send_otp_notification(user=user, otp_code=raw_code)
-        if settings.DEBUG and getattr(settings, "OTP_DEBUG_OUTPUT", True):
-            print(f"[OTP DEBUG] {user.phone_number}: {raw_code}")
+        send_otp_email(email=user.email, code=raw_code)
+
+        user.last_otp_sent = timezone.now()
+        user.save(update_fields=["last_otp_sent"])
         return otp
 
     @transaction.atomic
-    def verify_otp(self, user: User, code: str) -> OTPCode:
+    def verify_otp(self, user: User, code: str) -> bool:
         if not user.is_active:
             raise PermissionDenied("User account is inactive.")
 
@@ -47,12 +49,10 @@ class OTPService:
             .first()
         )
 
-        if otp is None:
-            raise ValidationError({"code": "Invalid or expired verification code."})
-
-        if otp.is_expired:
-            otp.is_used = True
-            otp.save(update_fields=["is_used"])
+        if otp is None or otp.is_expired:
+            if otp:
+                otp.is_used = True
+                otp.save(update_fields=["is_used"])
             raise ValidationError({"code": "Invalid or expired verification code."})
 
         if not otp.verify_code(code):
@@ -65,7 +65,7 @@ class OTPService:
             user.is_verified = True
             user.save(update_fields=["is_verified"])
 
-        return otp
+        return True
 
     def _enforce_rate_limit(self, user: User) -> None:
         window_start = timezone.now() - self.rate_limit_window
@@ -73,7 +73,8 @@ class OTPService:
             user=user,
             created_at__gte=window_start,
         ).count()
+
         if recent_requests >= self.max_requests_per_window:
             raise ValidationError(
-                {"phone_number": "Too many OTP requests. Please try again later."}
+                {"email": "Too many OTP requests. Please try again later."}
             )

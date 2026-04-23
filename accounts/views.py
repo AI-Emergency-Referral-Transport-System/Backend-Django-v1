@@ -13,6 +13,25 @@ from accounts.services.otp_service import OTPService
 User = get_user_model()
 
 
+class AuthRootAPIView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        return response.Response(
+            {
+                "message": "Auth API is available.",
+                "endpoints": {
+                    "signup": "/api/v1/auth/signup/",
+                    "otp_request": "/api/v1/auth/otp/request/",
+                    "otp_verify": "/api/v1/auth/otp/verify/",
+                    "token_refresh": "/api/v1/auth/token/refresh/",
+                    "profile": "/api/v1/auth/profile/",
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class OTPRequestAPIView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -21,14 +40,17 @@ class OTPRequestAPIView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user, _ = User.objects.get_or_create(
-            phone_number=serializer.validated_data["phone_number"],
+            email=serializer.validated_data["email"],
             defaults={"role": User.Role.PATIENT},
         )
-        ensure_profile_bundle(user)
+        profile = ensure_profile_bundle(user)
         OTPService().request_otp(user)
 
         return response.Response(
-            {"detail": "Verification code sent successfully."},
+            {
+                "detail": "Verification code sent successfully.",
+                "profile": ProfileSerializer(profile).data,
+            },
             status=status.HTTP_202_ACCEPTED,
         )
 
@@ -40,7 +62,7 @@ class OTPVerifyAPIView(APIView):
         serializer = OTPVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user = User.objects.filter(phone_number=serializer.validated_data["phone_number"]).first()
+        user = User.objects.filter(email=serializer.validated_data["email"]).first()
         if user is None:
             raise ValidationError({"code": "Invalid or expired verification code."})
 

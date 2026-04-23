@@ -4,7 +4,7 @@ Starter backend scaffold for a multi-actor emergency coordination platform built
 
 ## Apps
 
-- `accounts`: custom users, roles, OTP placeholders, JWT entry points
+- `accounts`: custom users, roles, email OTP authentication, JWT entry points
 - `emergencies`: emergency lifecycle scaffolding
 - `hospitals`: hospital availability and capacity
 - `ambulances`: ambulance registry and driver assignment
@@ -20,6 +20,6 @@ Starter backend scaffold for a multi-actor emergency coordination platform built
 
 ## Notes
 
-- OTP and AI flows are placeholders only.
+- AI flows are placeholders only.
 - JWT settings are wired, but OTP-to-token issuance should be completed by the team.
 - The structure is split by app ownership to reduce merge conflicts during parallel development.

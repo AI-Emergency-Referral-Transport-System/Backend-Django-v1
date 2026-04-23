@@ -4,15 +4,16 @@ from django.contrib.auth.base_user import BaseUserManager
 class UserManager(BaseUserManager):
     use_in_migrations = True
 
-    def create_user(self, phone_number: str, password: str | None = None, **extra_fields):
-        if not phone_number:
-            raise ValueError("Phone number is required.")
+    def create_user(self, email: str, password: str | None = None, **extra_fields):
+        if not email:
+            raise ValueError("Email is required.")
 
-        email = extra_fields.get("email")
-        if email:
-            extra_fields["email"] = self.normalize_email(email)
+        normalized_email = self.normalize_email(email)
+        phone_number = extra_fields.pop("phone_number", None)
+        if phone_number is not None:
+            phone_number = phone_number.strip() or None
 
-        user = self.model(phone_number=phone_number.strip(), **extra_fields)
+        user = self.model(email=normalized_email, phone_number=phone_number, **extra_fields)
         if password:
             user.set_password(password)
         else:
@@ -20,7 +21,7 @@ class UserManager(BaseUserManager):
         user.save(using=self._db)
         return user
 
-    def create_superuser(self, phone_number: str, password: str, **extra_fields):
+    def create_superuser(self, email: str, password: str, **extra_fields):
         extra_fields.setdefault("role", "hospital_admin")
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
@@ -32,4 +33,4 @@ class UserManager(BaseUserManager):
         if extra_fields.get("is_superuser") is not True:
             raise ValueError("Superuser must have is_superuser=True.")
 
-        return self.create_user(phone_number, password, **extra_fields)
+        return self.create_user(email, password, **extra_fields)
