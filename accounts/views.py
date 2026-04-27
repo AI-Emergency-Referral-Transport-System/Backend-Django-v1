@@ -13,6 +13,30 @@ from accounts.services.otp_service import OTPService
 User = get_user_model()
 
 
+class AuthRootAPIView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        return response.Response(
+            {
+                "message": "Email OTP auth API is available.",
+                "how_it_works": {
+                    "request_otp": "POST email to /api/v1/auth/otp/request/",
+                    "check_code": "Read the OTP from the server terminal when using the console email backend.",
+                    "verify_otp": "POST email and code to /api/v1/auth/otp/verify/",
+                },
+                "example_request": {
+                    "email": "test@gmail.com",
+                },
+                "example_verify": {
+                    "email": "test@gmail.com",
+                    "code": "123456",
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class OTPRequestAPIView(APIView):
     permission_classes = [permissions.AllowAny]
 
