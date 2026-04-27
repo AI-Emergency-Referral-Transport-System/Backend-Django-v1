@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "channels",
     "accounts",
     "common",
+    "system_admin",
 ]
 
 if GIS_ENABLED:
