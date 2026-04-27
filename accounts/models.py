@@ -149,17 +149,17 @@ class Profile(TimestampedUUIDModel):
 
 
 class EmergencyContact(TimestampedUUIDModel):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="emergency_contact_records")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="emergency_contacts")
     name = models.CharField(max_length=255)
     phone = models.CharField(max_length=32)
-    relationship = models.CharField(max_length=100)
+    relationship = models.CharField(max_length=64, blank=True)
     is_primary = models.BooleanField(default=False)
 
     class Meta:
-        ordering = ["-is_primary", "name"]
+        ordering = ["-is_primary", "-created_at"]
 
     def __str__(self) -> str:
-        return f"EmergencyContact<{self.name} for {self.user_id}>"
+        return f"{self.name} ({self.phone})"
 
 
 class PatientProfile(TimestampedUUIDModel):

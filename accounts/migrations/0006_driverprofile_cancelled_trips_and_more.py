@@ -161,12 +161,12 @@ class Migration(migrations.Migration):
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('name', models.CharField(max_length=255)),
                 ('phone', models.CharField(max_length=32)),
-                ('relationship', models.CharField(max_length=100)),
+                ('relationship', models.CharField(blank=True, max_length=64)),
                 ('is_primary', models.BooleanField(default=False)),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='emergency_contact_records', to=settings.AUTH_USER_MODEL)),
+                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='emergency_contacts', to=settings.AUTH_USER_MODEL)),
             ],
             options={
-                'ordering': ['-is_primary', 'name'],
+                'ordering': ['-is_primary', '-created_at'],
             },
         ),
         migrations.CreateModel(

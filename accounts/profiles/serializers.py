@@ -63,7 +63,7 @@ class EmergencyContactSerializer(serializers.ModelSerializer):
 
 class PatientProfileSerializer(serializers.ModelSerializer):
     emergency_contact_records = EmergencyContactSerializer(
-        source="user.emergency_contact_records",
+        source="user.emergency_contacts",
         many=True,
         read_only=True,
     )

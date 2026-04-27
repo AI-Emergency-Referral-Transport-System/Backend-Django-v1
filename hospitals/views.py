@@ -1,196 +1,247 @@
 from django.contrib.gis.geos import Point
 from django.contrib.gis.db.models.functions import Distance
 from django.shortcuts import get_object_or_404
+from django.conf import settings
 
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.contrib.gis.measure import D 
 
 from common.permissions import RolePermission
-from emergencies.models import Emergency
-from hospitals.models import Hospital
-from hospitals.serializers import HospitalSerializer, HospitalResourceUpdateSerializer
+from hospitals.serializers import (
+    HospitalListSerializer,
+    HospitalRegistrationSerializer,
+    HospitalResourceSerializer,
+    HospitalResourceUpdateSerializer,
+    HospitalSerializer,
+)
+
+
+class HospitalRootAPIView(APIView):
+    permission_classes = [RolePermission]
+    allowed_roles = {"patient", "driver", "hospital_admin"}
+
+    def get(self, request):
+        return Response(
+            {
+                "message": "Hospitals API is available.",
+                "endpoints": {
+                    "list": "/api/v1/hospitals/",
+                    "register": "/api/v1/hospitals/register/",
+                    "nearby": "/api/v1/hospitals/nearby/",
+                    "resources": "/api/v1/hospitals/{id}/resources/",
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class HospitalListCreateAPIView(generics.ListCreateAPIView):
-    """
-    GET  /api/hospitals/       — List all hospitals (drivers, hospital_admins)
-    POST /api/hospitals/       — Register a new hospital (hospital_admin)
-    """
-    queryset = Hospital.objects.select_related("admin")
-    serializer_class = HospitalSerializer
+    queryset = None
+    serializer_class = HospitalListSerializer
     permission_classes = [RolePermission]
-    allowed_roles = {"driver", "hospital_admin"}
+    allowed_roles = {"patient", "driver", "hospital_admin"}
+
+    def get_queryset(self):
+        from hospitals.models import Hospital
+
+        if not settings.GIS_ENABLED:
+            return Response(
+                {"error": "Hospitals not available - GDAL required."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Hospital.objects.all()
+
+    def list(self, request):
+        from hospitals.models import Hospital
+
+        queryset = Hospital.objects.all()
+        city = request.query_params.get("city")
+        specialty = request.query_params.get("specialty")
+        search = request.query_params.get("search")
+
+        if city:
+            queryset = queryset.filter(address__icontains=city)
+        if specialty == "emergency":
+            queryset = queryset.filter(has_trauma=True)
+        if search:
+            queryset = queryset.filter(name__icontains=search) | queryset.filter(
+                address__icontains=search
+            )
+
+        serializer = HospitalListSerializer(queryset, many=True)
+        return Response(
+            {"count": queryset.count(), "results": serializer.data},
+            status=status.HTTP_200_OK,
+        )
+
+    def create(self, request):
+        from hospitals.models import Hospital
+        from accounts.models import User, HospitalProfile
+
+        serializer = HospitalRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        admin_email = data.get("admin_email", data.get("email"))
+        if not admin_email:
+            return Response(
+                {"success": False, "errors": {"admin_email": ["Required."]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if User.objects.filter(email=admin_email).exists():
+            return Response(
+                {"success": False, "errors": {"admin_email": ["Email already registered."]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = User.objects.create_user(
+            email=admin_email,
+            password=data.get("admin_password", "password123"),
+            role=User.Role.HOSPITAL_ADMIN,
+        )
+
+        HospitalProfile.objects.create(
+            user=user,
+            hospital_name=data["name"],
+            address=data.get("address", ""),
+            available_beds=data.get("total_beds", 0),
+        )
+
+        location = None
+        if data.get("latitude") and data.get("longitude"):
+            location = Point(data["longitude"], data["latitude"], srid=4326)
+
+        hospital = Hospital.objects.create(
+            name=data["name"],
+            phone=data.get("phone", ""),
+            admin=user,
+            location=location,
+            available_beds=data.get("total_beds", 0),
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Hospital registered successfully. Waiting for admin approval.",
+                "hospital_id": str(hospital.id),
+                "status": "pending",
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class HospitalDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
-    """
-    GET    /api/hospitals/{id}/  — Retrieve hospital details
-    PUT    /api/hospitals/{id}/  — Full update (hospital_admin)
-    PATCH  /api/hospitals/{id}/  — Partial update (hospital_admin)
-    DELETE /api/hospitals/{id}/  — Delete (hospital_admin)
-    """
-    queryset = Hospital.objects.select_related("admin")
+    queryset = None
     serializer_class = HospitalSerializer
     permission_classes = [RolePermission]
     allowed_roles = {"hospital_admin"}
 
+    def get_queryset(self):
+        from hospitals.models import Hospital
 
-class HospitalResourceUpdateAPIView(APIView):
-    """
-    PUT /api/hospital/resources/
-    Hospital admin updates their own hospital's live resource status
-    (beds, ICU, oxygen, specialties, availability).
-    """
-    permission_classes = [RolePermission]
-    allowed_roles = {"hospital_admin"}
+        return Hospital.objects.all()
 
-    def put(self, request):
-        hospital = get_object_or_404(Hospital, admin=request.user)
-        serializer = HospitalResourceUpdateSerializer(hospital, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+    def retrieve(self, request, pk=None):
+        from hospitals.models import Hospital
+        from django.shortcuts import get_object_or_404
 
-        hospital.refresh_from_db()
-
-        if hospital.available_beds <= 0 and hospital.available_icu_beds <= 0:
-            if hospital.is_available:
-                hospital.is_available = False
-                hospital.save(update_fields=["is_available"])
-        else:
-            if not hospital.is_available:
-                hospital.is_available = True
-                hospital.save(update_fields=["is_available"])
-
+        hospital = get_object_or_404(Hospital, id=pk)
+        serializer = HospitalSerializer(hospital)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-class HospitalIncomingEmergenciesAPIView(APIView):
-    """
-    GET /api/hospital/incoming/
-    Returns emergencies currently routed to this hospital admin's hospital
-    that are in REQUESTED or ASSIGNED state.
-    """
-    permission_classes = [RolePermission]
-    allowed_roles = {"hospital_admin"}
+    def update(self, request, pk=None):
+        from hospitals.models import Hospital
+        from django.shortcuts import get_object_or_404
 
-    def get(self, request):
-        from emergencies.serializers import EmergencyDetailSerializer
-        hospital = get_object_or_404(Hospital, admin=request.user)
-        incoming = Emergency.objects.filter(
-            hospital=hospital,
-            status__in=[Emergency.Status.REQUESTED, Emergency.Status.ASSIGNED],
-        ).select_related("patient", "ambulance", "hospital")
-        serializer = EmergencyDetailSerializer(incoming, many=True)
-        return Response(serializer.data)
+        hospital = get_object_or_404(Hospital, id=pk)
+        serializer = HospitalSerializer(hospital, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
+    def destroy(self, request, pk=None):
+        from hospitals.models import Hospital
+        from django.shortcuts import get_object_or_404
 
-class HospitalApproveEmergencyAPIView(APIView):
-    """
-    POST /api/hospital/approve/{emergency_id}/
-    Hospital admin confirms they will accept and prepare for this emergency.
-    Status transitions: REQUESTED → ASSIGNED
-    """
-    permission_classes = [RolePermission]
-    allowed_roles = {"hospital_admin"}
-
-    def post(self, request, emergency_id):
-        hospital = get_object_or_404(Hospital, admin=request.user)
-        emergency = get_object_or_404(Emergency, id=emergency_id, hospital=hospital)
-
-        if emergency.status != Emergency.Status.REQUESTED:
-            return Response(
-                {"detail": "Only emergencies in 'requested' state can be approved."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        emergency.status = Emergency.Status.ASSIGNED
-        emergency.save(update_fields=["status"])
-        return Response({"detail": "Emergency approved. Hospital is preparing."}, status=status.HTTP_200_OK)
-
-
-class HospitalRejectEmergencyAPIView(APIView):
-    """
-    POST /api/hospital/reject/{emergency_id}/
-    Hospital admin rejects the case. Clears the hospital assignment so the
-    emergency can be reassigned to another hospital immediately.
-    """
-    permission_classes = [RolePermission]
-    allowed_roles = {"hospital_admin"}
-
-    def post(self, request, emergency_id):
-        hospital = get_object_or_404(Hospital, admin=request.user)
-        emergency = get_object_or_404(
-            Emergency,
-            id=emergency_id,
-            hospital=hospital,
-            status__in=[Emergency.Status.REQUESTED, Emergency.Status.ASSIGNED],
+        hospital = get_object_or_404(Hospital, id=pk)
+        hospital.delete()
+        return Response(
+            {"success": True, "message": "Hospital deleted successfully"},
+            status=status.HTTP_200_OK,
         )
-
-        # Clear hospital so assigment logic can reroute
-        emergency.hospital = None
-        emergency.status = Emergency.Status.REQUESTED
-        emergency.save(update_fields=["hospital", "status"])
-        return Response({"detail": "Emergency rejected. It will be reassigned."}, status=status.HTTP_200_OK)
-
-
-class HospitalPatientArrivedAPIView(APIView):
-    """
-    POST /api/hospital/arrived/{emergency_id}/
-    Hospital admin confirms patient has arrived. Marks emergency as COMPLETED.
-    """
-    permission_classes = [RolePermission]
-    allowed_roles = {"hospital_admin"}
-
-    def post(self, request, emergency_id):
-        hospital = get_object_or_404(Hospital, admin=request.user)
-        emergency = get_object_or_404(
-            Emergency,
-            id=emergency_id,
-            hospital=hospital,
-            status=Emergency.Status.IN_PROGRESS,
-        )
-        emergency.mark_completed()
-        return Response({"detail": "Patient arrival confirmed. Emergency completed."}, status=status.HTTP_200_OK)
 
 
 class HospitalNearbyAPIView(APIView):
-    """
-    GET /api/hospitals/nearby/?lat=<lat>&lng=<lng>&radius=<km>
-    Returns available hospitals sorted by proximity to the given coordinates.
-    Accessible by patients to select a hospital for their emergency.
-    """
     permission_classes = [RolePermission]
     allowed_roles = {"patient", "driver", "hospital_admin"}
-    
+
     def get(self, request):
-        try:
-            lat = float(request.query_params["lat"])
-            lng = float(request.query_params["lng"])
-        except (KeyError, ValueError):
+        from django.contrib.gis.measure import D
+        from hospitals.models import Hospital
+
+        if not settings.GIS_ENABLED:
             return Response(
-                {"detail": "Query params 'lat' and 'lng' are required and must be valid numbers."},
+                {"error": "Nearby hospitals not available - GDAL required."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            lat = float(request.query_params.get("latitude"))
+            lng = float(request.query_params.get("longitude"))
+        except (TypeError, ValueError):
+            return Response(
+                {"success": False, "errors": {"detail": "latitude and longitude required."}},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        
-        radius_km = float(request.query_params.get('radius', 20))
+
+        radius = float(request.query_params.get("radius", 20))
         user_location = Point(lng, lat, srid=4326)
 
-        hospitals = Hospital.objects.filter(
+        hospitals = (
+            Hospital.objects.filter(
                 is_available=True,
-                location__distance_lte=(user_location, D(km=radius_km))
-            ).annotate(distance=Distance("location", user_location))
-        
-        if request.query_params.get("need_oxygen") == "true":
-            hospitals = hospitals.exclude(oxygen_level=Hospital.OxygenLevel.CRITICAL)
-        
-        hospitals = hospitals.order_by("distance")
+                location__distance_lte=(user_location, D(km=radius)),
+            )
+            .annotate(distance=Distance("location", user_location))
+            .order_by("distance")[:10]
+        )
 
-        if not hospitals.exists():
-            return Response({
-                "message": f"No hospitals with required resources found within {radius_km}km.",
-                "hospitals": []
-            }, status=status.HTTP_200_OK)
-        
-        serializer = HospitalSerializer(hospitals, many=True)
-        return Response(serializer.data)
+        results = []
+        for h in hospitals:
+            results.append(
+                {
+                    "id": str(h.id),
+                    "name": h.name,
+                    "facility_type": "hospital",
+                    "distance_km": round(h.distance.km, 2) if hasattr(h, "distance") else None,
+                    "available_beds": h.available_beds,
+                    "has_emergency": h.has_trauma,
+                }
+            )
+
+        return Response({"count": len(results), "results": results}, status=status.HTTP_200_OK)
+
+
+class HospitalResourceAPIView(APIView):
+    permission_classes = [RolePermission]
+    allowed_roles = {"hospital_admin"}
+
+    def get(self, request, hospital_id):
+        from hospitals.models import Hospital
+        from django.shortcuts import get_object_or_404
+
+        hospital = get_object_or_404(Hospital, id=hospital_id)
+        serializer = HospitalResourceSerializer(hospital)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, hospital_id):
+        from hospitals.models import Hospital
+        from django.shortcuts import get_object_or_404
+
+        hospital = get_object_or_404(Hospital, id=hospital_id)
+        serializer = HospitalResourceUpdateSerializer(hospital, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)

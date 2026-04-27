@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib.gis.db import models
 from common.models import TimestampedUUIDModel
 
+
 class Ambulance(TimestampedUUIDModel):
     class AmbulanceType(models.TextChoices):
         BASIC = "basic", "Basic"
@@ -23,7 +24,7 @@ class Ambulance(TimestampedUUIDModel):
         APPROVED = "approved", "Approved"
         REJECTED = "rejected", "Rejected"
 
-    plate_number = models.CharField(max_length=20, unique=True) 
+    plate_number = models.CharField(max_length=20, unique=True)
     ambulance_type = models.CharField(
         max_length=32,
         choices=AmbulanceType.choices,
@@ -47,16 +48,18 @@ class Ambulance(TimestampedUUIDModel):
         related_name="ambulances",
     )
 
-    current_location = models.PointField(srid=4326, null=True, blank=True)
-    last_location_update = models.DateTimeField(null=True, blank=True)
-    equipment = models.JSONField(default=list, blank=True)
+    organization = models.CharField(max_length=100, blank=True)
     phone = models.CharField(max_length=32, blank=True)
-    organization = models.CharField(max_length=255, blank=True)
+    equipment = models.JSONField(default=list, blank=True)
+
+    if settings.GIS_ENABLED:
+        current_location = models.PointField(srid=4326, null=True, blank=True)
+        last_location_update = models.DateTimeField(null=True, blank=True)
     image = models.FileField(upload_to="ambulances/images/", blank=True, null=True)
 
     status = models.CharField(
-        max_length=32, 
-        choices=Status.choices, 
+        max_length=32,
+        choices=Status.choices,
         default=Status.AVAILABLE
     )
     verification_status = models.CharField(
