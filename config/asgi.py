@@ -1,11 +1,11 @@
 import os
 from pathlib import Path
 
+from django.conf import settings
 from channels.routing import ProtocolTypeRouter, URLRouter
 from django.core.asgi import get_asgi_application
 from channels.auth import AuthMiddlewareStack
 from dotenv import load_dotenv
-import tracking.routing
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -16,6 +16,12 @@ os.environ.setdefault(
 
 django_asgi_app = get_asgi_application()
 
+websocket_urlpatterns = []
+if settings.GIS_ENABLED:
+    from tracking.routing import websocket_urlpatterns as tracking_websocket_urlpatterns
+
+    websocket_urlpatterns = tracking_websocket_urlpatterns
+
 
 application = ProtocolTypeRouter(
     {
@@ -25,7 +31,7 @@ application = ProtocolTypeRouter(
     # Handle WebSocket requests
     "websocket": AuthMiddlewareStack(
         URLRouter(
-            tracking.routing.websocket_urlpatterns
+            websocket_urlpatterns
         )
     ),
     }
