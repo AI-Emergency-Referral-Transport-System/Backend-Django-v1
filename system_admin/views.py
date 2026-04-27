@@ -10,8 +10,6 @@ from system_admin.serializers import (
     AdminHospitalProfileSerializer,
 )
 from common.permissions import RolePermission
-from emergencies.models import Emergency
-from hospitals.models import Hospital
 
 
 class AdminDashboardAPIView(APIView):
@@ -19,24 +17,40 @@ class AdminDashboardAPIView(APIView):
     allowed_roles = {"admin"}
 
     def get(self, request):
+        from django.conf import settings
+        
         data = {
             "total_patients": User.objects.filter(role=User.Role.PATIENT).count(),
             "total_drivers": User.objects.filter(role=User.Role.DRIVER).count(),
-            "total_hospitals": Hospital.objects.count(),
-            "total_emergencies": Emergency.objects.count(),
+            "total_hospital_admins": User.objects.filter(role=User.Role.HOSPITAL_ADMIN).count(),
             "pending_hospitals": HospitalProfile.objects.filter(
                 registration_status=HospitalProfile.RegistrationStatus.PENDING
             ).count(),
             "pending_drivers": DriverProfile.objects.filter(
                 verification_status=DriverProfile.VerificationStatus.PENDING
             ).count(),
-            "active_emergencies": Emergency.objects.exclude(
-                status=Emergency.Status.DELIVERED
-            ).count(),
-            "completed_emergencies": Emergency.objects.filter(
-                status=Emergency.Status.DELIVERED
-            ).count(),
         }
+        
+        if settings.GIS_ENABLED:
+            try:
+                from emergencies.models import Emergency
+                data["total_emergencies"] = Emergency.objects.count()
+                data["active_emergencies"] = Emergency.objects.exclude(
+                    status=Emergency.Status.DELIVERED
+                ).count()
+                data["completed_emergencies"] = Emergency.objects.filter(
+                    status=Emergency.Status.DELIVERED
+                ).count()
+            except Exception:
+                data["total_emergencies"] = 0
+                data["active_emergencies"] = 0
+                data["completed_emergencies"] = 0
+        else:
+            data["total_emergencies"] = 0
+            data["active_emergencies"] = 0
+            data["completed_emergencies"] = 0
+            data["gis_enabled"] = False
+            
         serializer = AdminDashboardSerializer(data)
         return Response(serializer.data)
 
@@ -74,15 +88,6 @@ class AdminApproveHospitalAPIView(APIView):
         user = hospital_profile.user
         user.is_verified = True
         user.save(update_fields=["is_verified"])
-
-        Hospital.objects.get_or_create(
-            admin=user,
-            defaults={
-                "name": hospital_profile.hospital_name or "Unnamed Hospital",
-                "phone": user.phone_number,
-                "available_beds": hospital_profile.available_beds,
-            },
-        )
 
         return Response(
             {"detail": "Hospital approved successfully."},
@@ -179,9 +184,16 @@ class AdminAllHospitalsAPIView(APIView):
     allowed_roles = {"admin"}
 
     def get(self, request):
-        hospitals = Hospital.objects.select_related("admin").order_by("-created_at")
+        from django.conf import settings
+        if not settings.GIS_ENABLED:
+            return Response(
+                {"detail": "Hospitals not available - GDAL required."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        from hospitals.models import Hospital
         from hospitals.serializers import HospitalSerializer
 
+        hospitals = Hospital.objects.select_related("admin").order_by("-created_at")
         serializer = HospitalSerializer(hospitals, many=True)
         return Response(serializer.data)
 
@@ -201,10 +213,17 @@ class AdminAllEmergenciesAPIView(APIView):
     allowed_roles = {"admin"}
 
     def get(self, request):
+        from django.conf import settings
+        if not settings.GIS_ENABLED:
+            return Response(
+                {"detail": "Emergencies not available - GDAL required."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        from emergencies.models import Emergency
+        from emergencies.serializers import EmergencySerializer
+
         emergencies = Emergency.objects.select_related(
             "patient", "assigned_ambulance", "selected_hospital"
         ).order_by("-created_at")
-        from emergencies.serializers import EmergencySerializer
-
         serializer = EmergencySerializer(emergencies, many=True)
         return Response(serializer.data)

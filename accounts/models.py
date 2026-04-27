@@ -190,3 +190,17 @@ class OTPCode(TimestampedUUIDModel):
     def verify_code(self, raw_code: str) -> bool:
         """Checks raw OTP against hashed code."""
         return check_password(raw_code, self.code)
+
+
+class EmergencyContact(TimestampedUUIDModel):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="emergency_contacts")
+    name = models.CharField(max_length=255)
+    phone = models.CharField(max_length=32)
+    relationship = models.CharField(max_length=64, blank=True)
+    is_primary = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-is_primary", "-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.phone})"
