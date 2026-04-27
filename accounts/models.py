@@ -3,23 +3,52 @@ from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from django.utils import timezone
-from datetime import timedelta
 
 from accounts.managers import UserManager
 from common.models import TimestampedUUIDModel
+
 
 class User(TimestampedUUIDModel, AbstractBaseUser, PermissionsMixin):
     class Role(models.TextChoices):
         PATIENT = "patient", "Patient"
         DRIVER = "driver", "Driver"
         HOSPITAL_ADMIN = "hospital_admin", "Hospital Admin"
+        ADMIN = "admin", "Admin"
+
+    class Gender(models.TextChoices):
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
+        OTHER = "other", "Other"
+
+    class PreferredLanguage(models.TextChoices):
+        ENGLISH = "en", "English"
+        AMHARIC = "am", "Amharic"
 
     phone_number = models.CharField(max_length=32, unique=True, null=True, blank=True)
     email = models.EmailField(unique=True, null=True, blank=True)
+    name = models.CharField(max_length=255, blank=True)
     role = models.CharField(max_length=32, choices=Role.choices, default=Role.PATIENT)
+    age = models.PositiveIntegerField(null=True, blank=True)
+    gender = models.CharField(max_length=16, choices=Gender.choices, blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    blood_type = models.CharField(max_length=5, blank=True)
+    medical_history = models.JSONField(default=list, blank=True)
+    allergies = models.TextField(blank=True)
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
     is_verified = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
+    verification_token = models.CharField(max_length=255, blank=True)
+    verification_token_expires = models.DateTimeField(null=True, blank=True)
+    password_reset_token = models.CharField(max_length=255, blank=True)
+    password_reset_expires = models.DateTimeField(null=True, blank=True)
+    profile_image = models.FileField(upload_to="profiles/", blank=True, null=True)
+    preferred_language = models.CharField(
+        max_length=8,
+        choices=PreferredLanguage.choices,
+        default=PreferredLanguage.ENGLISH,
+    )
     date_joined = models.DateTimeField(default=timezone.now)
 
     # Useful for rate-limiting OTP delivery
@@ -37,6 +66,15 @@ class User(TimestampedUUIDModel, AbstractBaseUser, PermissionsMixin):
         return f"{self.email or self.phone_number or self.pk} ({self.role})"
 
     @property
+    def full_name(self) -> str:
+        if self.name:
+            return self.name
+        try:
+            return self.profile.full_name
+        except ObjectDoesNotExist:
+            return ""
+
+    @property
     def safe_driver_profile(self):
         try:
             return self.driver_profile
@@ -47,6 +85,13 @@ class User(TimestampedUUIDModel, AbstractBaseUser, PermissionsMixin):
     def safe_hospital_profile(self):
         try:
             return self.hospital_profile
+        except ObjectDoesNotExist:
+            return None
+
+    @property
+    def safe_patient_profile(self):
+        try:
+            return self.patient_profile
         except ObjectDoesNotExist:
             return None
 
@@ -82,6 +127,18 @@ class Profile(TimestampedUUIDModel):
     def __str__(self) -> str:
         return f"Profile<{self.user.email or self.user.phone_number or self.user_id}>"
 
+    def save(self, *args, **kwargs):
+        user_updates = []
+        if self.user.name != self.full_name:
+            self.user.name = self.full_name
+            user_updates.append("name")
+        if self.blood_type and self.user.blood_type != self.blood_type:
+            self.user.blood_type = self.blood_type
+            user_updates.append("blood_type")
+        if user_updates:
+            self.user.save(update_fields=user_updates)
+        super().save(*args, **kwargs)
+
     @property
     def driver_profile(self):
         return self.user.safe_driver_profile
@@ -89,6 +146,36 @@ class Profile(TimestampedUUIDModel):
     @property
     def hospital_profile(self):
         return self.user.safe_hospital_profile
+
+
+class EmergencyContact(TimestampedUUIDModel):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="emergency_contacts")
+    name = models.CharField(max_length=255)
+    phone = models.CharField(max_length=32)
+    relationship = models.CharField(max_length=64, blank=True)
+    is_primary = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-is_primary", "-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.phone})"
+
+
+class PatientProfile(TimestampedUUIDModel):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="patient_profile",
+        limit_choices_to={"role": User.Role.PATIENT},
+    )
+    emergency_contacts = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        ordering = ["user__email", "user__phone_number"]
+
+    def __str__(self) -> str:
+        return f"PatientProfile<{self.user_id}>"
 
 
 class DriverProfile(TimestampedUUIDModel):
@@ -109,11 +196,21 @@ class DriverProfile(TimestampedUUIDModel):
     )
     plate_number = models.CharField(max_length=32, blank=True)
     vehicle_type = models.CharField(max_length=64, blank=True)
+    license_number = models.CharField(max_length=64, blank=True)
+    license_expiry = models.DateField(null=True, blank=True)
+    experience_years = models.PositiveIntegerField(default=0)
     availability = models.CharField(
         max_length=16,
         choices=Availability.choices,
         default=Availability.OFFLINE,
     )
+    is_on_duty = models.BooleanField(default=False)
+    total_trips = models.PositiveIntegerField(default=0)
+    completed_trips = models.PositiveIntegerField(default=0)
+    cancelled_trips = models.PositiveIntegerField(default=0)
+    rating = models.FloatField(default=4.5)
+    total_ratings = models.PositiveIntegerField(default=0)
+    total_hours = models.PositiveIntegerField(default=0)
     has_oxygen = models.BooleanField(default=False)
     has_defibrillator = models.BooleanField(default=False)
     verification_status = models.CharField(
@@ -121,6 +218,14 @@ class DriverProfile(TimestampedUUIDModel):
         choices=VerificationStatus.choices,
         default=VerificationStatus.PENDING,
     )
+    verified_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="verified_driver_profiles",
+    )
+    verified_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["user__phone_number"]
@@ -190,17 +295,3 @@ class OTPCode(TimestampedUUIDModel):
     def verify_code(self, raw_code: str) -> bool:
         """Checks raw OTP against hashed code."""
         return check_password(raw_code, self.code)
-
-
-class EmergencyContact(TimestampedUUIDModel):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="emergency_contacts")
-    name = models.CharField(max_length=255)
-    phone = models.CharField(max_length=32)
-    relationship = models.CharField(max_length=64, blank=True)
-    is_primary = models.BooleanField(default=False)
-
-    class Meta:
-        ordering = ["-is_primary", "-created_at"]
-
-    def __str__(self) -> str:
-        return f"{self.name} ({self.phone})"

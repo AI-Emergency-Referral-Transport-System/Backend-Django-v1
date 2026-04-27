@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Ambulance, Driver
+from .models import Ambulance
 
 
 class DriverCreateSerializer(serializers.Serializer):
@@ -21,6 +21,10 @@ class AmbulanceSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "plate_number",
+            "ambulance_type",
+            "vehicle_model",
+            "vehicle_year",
+            "vehicle_color",
             "driver",
             "driver_name",
             "hospital",
@@ -29,6 +33,8 @@ class AmbulanceSerializer(serializers.ModelSerializer):
             "organization",
             "phone",
             "equipment",
+            "verification_status",
+            "current_location",
             "created_at",
             "updated_at",
         )
@@ -38,4 +44,4 @@ class AmbulanceSerializer(serializers.ModelSerializer):
 class AmbulanceStatusUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ambulance
-        fields = ("status",)
+        fields = ("status", "current_location")

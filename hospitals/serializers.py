@@ -34,8 +34,8 @@ class HospitalRegistrationSerializer(serializers.Serializer):
 class HospitalSerializer(serializers.ModelSerializer):
     location = GeometryField(required=False)
     distance_km = serializers.FloatField(required=False, read_only=True)
-    facility_type = serializers.SerializerMethodField()
-    city = serializers.SerializerMethodField()
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
     has_emergency = serializers.BooleanField(required=False)
     has_icu = serializers.BooleanField(required=False)
     has_surgery = serializers.BooleanField(required=False)
@@ -48,16 +48,30 @@ class HospitalSerializer(serializers.ModelSerializer):
             "facility_type",
             "address",
             "city",
+            "region",
             "latitude",
             "longitude",
             "phone",
             "email",
-            "available_beds",
+            "admin",
+            "location",
             "total_beds",
+            "available_beds",
+            "occupied_beds",
             "total_icu_beds",
+            "available_icu_beds",
+            "occupied_icu_beds",
+            "oxygen_level",
+            "services",
+            "departments",
+            "specialties",
             "has_emergency",
             "has_icu",
             "has_surgery",
+            "has_cardiology",
+            "has_trauma",
+            "has_maternity",
+            "has_neonatal",
             "is_available",
             "verification_status",
             "distance_km",
@@ -65,16 +79,18 @@ class HospitalSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("id", "created_at")
 
-    def get_facility_type(self, obj):
-        return "hospital"
+    def get_latitude(self, obj):
+        if obj.location:
+            return obj.location.y
+        return None
 
-    def get_city(self, obj):
-        return getattr(obj, "_city", "")
+    def get_longitude(self, obj):
+        if obj.location:
+            return obj.location.x
+        return None
 
 
 class HospitalListSerializer(serializers.ModelSerializer):
-    facility_type = serializers.SerializerMethodField()
-    city = serializers.SerializerMethodField()
     latitude = serializers.SerializerMethodField()
     longitude = serializers.SerializerMethodField()
 
@@ -95,12 +111,6 @@ class HospitalListSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("id",)
 
-    def get_facility_type(self, obj):
-        return "hospital"
-
-    def get_city(self, obj):
-        return ""
-
     def get_latitude(self, obj):
         if obj.location:
             return obj.location.y
@@ -117,8 +127,11 @@ class HospitalResourceUpdateSerializer(serializers.ModelSerializer):
         model = Hospital
         fields = (
             "available_beds",
+            "occupied_beds",
             "available_icu_beds",
+            "occupied_icu_beds",
             "oxygen_level",
+            "services",
             "has_cardiology",
             "has_trauma",
             "is_available",

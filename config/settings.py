@@ -21,14 +21,29 @@ ALLOWED_HOSTS = [
 # --- 1. GIS / GEODJANGO CONFIG ---
 OSGEO4W_BIN = Path(os.environ.get("OSGEO4W_BIN", r"C:\OSGeo4W\bin"))
 gdal_files = glob.glob(str(OSGEO4W_BIN / "gdal*.dll")) if OSGEO4W_BIN.exists() else []
-GIS_ENABLED = bool(gdal_files)
+gis_override = os.environ.get("GIS_ENABLED", "").lower()
+if gis_override in {"1", "true", "yes", "on"}:
+    GIS_ENABLED = True
+elif gis_override in {"0", "false", "no", "off"}:
+    GIS_ENABLED = False
+else:
+    GIS_ENABLED = os.name != "nt" or bool(gdal_files)
 
 if GIS_ENABLED:
-    os.environ["PATH"] = str(OSGEO4W_BIN) + os.pathsep + os.environ["PATH"]
-    GDAL_LIBRARY_PATH = gdal_files[0]
-    geos_library = OSGEO4W_BIN / "geos_c.dll"
-    if geos_library.exists():
-        GEOS_LIBRARY_PATH = str(geos_library)
+    if os.name == "nt":
+        if gdal_files:
+            os.environ["PATH"] = str(OSGEO4W_BIN) + os.pathsep + os.environ["PATH"]
+            GDAL_LIBRARY_PATH = gdal_files[0]
+        geos_library = OSGEO4W_BIN / "geos_c.dll"
+        if geos_library.exists():
+            GEOS_LIBRARY_PATH = str(geos_library)
+    else:
+        gdal_library_path = os.environ.get("GDAL_LIBRARY_PATH", "")
+        geos_library_path = os.environ.get("GEOS_LIBRARY_PATH", "")
+        if gdal_library_path:
+            GDAL_LIBRARY_PATH = gdal_library_path
+        if geos_library_path:
+            GEOS_LIBRARY_PATH = geos_library_path
 else:
     print(r"WARNING: GIS features are disabled because GDAL was not found.")
 
@@ -48,6 +63,9 @@ INSTALLED_APPS = [
     "common",
     "system_admin",
 ]
+
+if GIS_ENABLED:
+    INSTALLED_APPS.insert(4, "django.contrib.gis")
 
 if GIS_ENABLED:
     INSTALLED_APPS += [
@@ -81,7 +99,11 @@ SIMPLE_JWT = {
 }
 
 # --- 4. DATABASE CONFIG ---
-USE_POSTGRES = os.environ.get("USE_POSTGRES", "").lower() in {"1", "true", "yes", "on"}
+use_postgres_raw = os.environ.get("USE_POSTGRES", "")
+if use_postgres_raw:
+    USE_POSTGRES = use_postgres_raw.lower() in {"1", "true", "yes", "on"}
+else:
+    USE_POSTGRES = bool(os.environ.get("POSTGRES_DB"))
 
 if USE_POSTGRES:
     default_engine = "django.contrib.gis.db.backends.postgis" if GIS_ENABLED else "django.db.backends.postgresql"
@@ -118,15 +140,6 @@ CHANNEL_LAYERS = {
 }
 
 # --- 6. OTP DELIVERY CONFIG ---
-SMS_PROVIDER = os.environ.get("SMS_PROVIDER", "console")
-AFROMESSAGE_TOKEN = os.environ.get("AFROMESSAGE_TOKEN", "")
-AFROMESSAGE_FROM = os.environ.get("AFROMESSAGE_FROM", "")
-AFROMESSAGE_SENDER_ID = os.environ.get("AFROMESSAGE_SENDER_ID", "")
-AFROMESSAGE_CALLBACK_URL = os.environ.get("AFROMESSAGE_CALLBACK_URL", "")
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
-TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER", "")
-TWILIO_MESSAGING_SERVICE_SID = os.environ.get("TWILIO_MESSAGING_SERVICE_SID", "")
 EMAIL_BACKEND = os.environ.get(
     "EMAIL_BACKEND",
     "django.core.mail.backends.console.EmailBackend",

@@ -5,6 +5,7 @@ from .views import (
     AmbulanceListCreateAPIView,
     AmbulanceStatusUpdateAPIView,
     DriverAcceptEmergencyAPIView,
+    DriverCreateAPIView,
     DriverDashboardAPIView,
     DriverDetailAPIView,
     DriverEmergencyActionAPIView,

@@ -7,7 +7,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import permissions
 
-from .models import Ambulance, Driver
+from accounts.models import DriverProfile
+from accounts.profiles.services import ensure_profile_bundle
+from .models import Ambulance
 from .serializers import AmbulanceSerializer, AmbulanceStatusUpdateSerializer, DriverCreateSerializer
 from common.permissions import RolePermission
 
@@ -55,10 +57,16 @@ class DriverCreateAPIView(APIView):
             role=User.Role.DRIVER,
         )
 
-        driver = Driver.objects.create(
+        driver = DriverProfile.objects.create(
             user=user,
             license_number=data.get("license_number", ""),
+            license_expiry=data.get("license_expiry"),
+            experience_years=data.get("experience_years", 0),
         )
+
+        ambulance_id = data.get("ambulance_id")
+        if ambulance_id:
+            Ambulance.objects.filter(id=ambulance_id).update(driver=user)
 
         from django.core.mail import send_mail
 
@@ -91,16 +99,16 @@ class DriverListAPIView(APIView):
     allowed_roles = {"hospital_admin"}
 
     def get(self, request):
-        drivers = Driver.objects.select_related("user").order_by("-created_at")
+        drivers = DriverProfile.objects.select_related("user", "user__profile").order_by("-created_at")
         results = []
         for d in drivers:
             results.append(
                 {
                     "id": str(d.id),
-                    "name": d.user.profile.full_name if d.user.profile else "",
+                    "name": d.user.full_name,
                     "email": d.user.email,
                     "phone": d.user.phone_number,
-                    "is_on_duty": d.availability == "online",
+                    "is_on_duty": d.is_on_duty,
                     "verification_status": d.verification_status,
                 }
             )
@@ -121,13 +129,14 @@ class DriverDetailAPIView(APIView):
     allowed_roles = {"hospital_admin"}
 
     def put(self, request, driver_id):
-        driver = get_object_or_404(Driver, id=driver_id)
+        driver = get_object_or_404(DriverProfile, id=driver_id)
         name = request.data.get("name")
         phone = request.data.get("phone")
 
-        if name and driver.user.profile:
-            driver.user.profile.full_name = name
-            driver.user.profile.save()
+        if name:
+            profile = ensure_profile_bundle(driver.user)
+            profile.full_name = name
+            profile.save()
         if phone:
             driver.user.phone_number = phone
             driver.user.save()
@@ -138,7 +147,7 @@ class DriverDetailAPIView(APIView):
         )
 
     def delete(self, request, driver_id):
-        driver = get_object_or_404(Driver, id=driver_id)
+        driver = get_object_or_404(DriverProfile, id=driver_id)
         driver.user.delete()
         return Response(
             {"success": True, "message": "Driver deleted successfully"},
@@ -207,22 +216,22 @@ class DriverDashboardAPIView(APIView):
     allowed_roles = {"driver"}
 
     def get(self, request):
-        driver = Driver.objects.filter(user=request.user).first()
+        driver = DriverProfile.objects.filter(user=request.user).first()
         if not driver:
             return Response(
                 {"success": False, "errors": {"detail": "Driver profile not found."}},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        ambulance = getattr(driver, "ambulance", None)
+        ambulance = Ambulance.objects.filter(driver=request.user).first()
 
         return Response(
             {
                 "success": True,
                 "driver": {
                     "id": str(driver.id),
-                    "name": driver.user.profile.full_name if driver.user.profile else "",
-                    "is_on_duty": driver.availability == "online",
+                    "name": driver.user.full_name,
+                    "is_on_duty": driver.is_on_duty,
                 },
                 "ambulance": (
                     {
@@ -236,7 +245,7 @@ class DriverDashboardAPIView(APIView):
                 "stats": {
                     "today_trips": 0,
                     "completed_trips": 0,
-                    "is_online": driver.availability == "online",
+                    "is_online": driver.is_on_duty,
                 },
                 "active_emergency": None,
             },
@@ -249,7 +258,7 @@ class DriverGoOnlineAPIView(APIView):
     allowed_roles = {"driver"}
 
     def post(self, request):
-        driver = Driver.objects.filter(user=request.user).first()
+        driver = DriverProfile.objects.filter(user=request.user).first()
         if not driver:
             return Response(
                 {"success": False, "errors": {"detail": "Driver profile not found."}},
@@ -261,7 +270,10 @@ class DriverGoOnlineAPIView(APIView):
         lng = request.data.get("longitude")
 
         driver.availability = "online" if is_online else "offline"
-        driver.save()
+        driver.is_on_duty = is_online
+        driver.save(update_fields=["availability", "is_on_duty"])
+
+        ambulance = Ambulance.objects.filter(driver=request.user).first()
 
         return Response(
             {
@@ -272,8 +284,8 @@ class DriverGoOnlineAPIView(APIView):
                     "is_on_duty": is_online,
                 },
                 "ambulance": (
-                    {"id": str(driver.ambulance.id), "status": driver.ambulance.status}
-                    if hasattr(driver, "ambulance") and driver.ambulance
+                    {"id": str(ambulance.id), "status": ambulance.status}
+                    if ambulance
                     else None
                 ),
             },
@@ -340,6 +352,8 @@ class DriverAcceptEmergencyAPIView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
+        from emergencies.models import Emergency
+
         ambulance = get_object_or_404(Ambulance, driver=request.user)
         emergency = get_object_or_404(Emergency, id=emergency_id)
 
@@ -374,6 +388,8 @@ class DriverEmergencyActionAPIView(APIView):
             )
 
         action = request.data.get("action")
+        from emergencies.models import Emergency
+
         emergency = get_object_or_404(Emergency, id=emergency_id)
 
         if action == "arrived":

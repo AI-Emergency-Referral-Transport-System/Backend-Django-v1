@@ -22,7 +22,7 @@ class UserManager(BaseUserManager):
         return user
 
     def create_superuser(self, email: str, password: str, **extra_fields):
-        extra_fields.setdefault("role", "hospital_admin")
+        extra_fields.setdefault("role", "admin")
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
         extra_fields.setdefault("is_active", True)
