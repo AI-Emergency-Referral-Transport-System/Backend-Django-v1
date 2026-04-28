@@ -1,7 +1,24 @@
 from rest_framework import serializers
 from rest_framework_gis.fields import GeometryField
 
-from emergencies.models import Emergency
+from emergencies.models import Emergency, HospitalSuggestion
+
+
+class HospitalSuggestionSerializer(serializers.ModelSerializer):
+    hospital_id = serializers.UUIDField(source="hospital.id", read_only=True)
+    hospital_name = serializers.CharField(source="hospital.name", read_only=True)
+
+    class Meta:
+        model = HospitalSuggestion
+        fields = (
+            "hospital_id",
+            "hospital_name",
+            "distance_km",
+            "score",
+            "reason",
+            "is_selected",
+        )
+        read_only_fields = fields
 
 
 class EmergencySerializer(serializers.ModelSerializer):
@@ -53,6 +70,7 @@ class EmergencyDetailSerializer(serializers.ModelSerializer):
     patient_location = GeometryField(required=False, allow_null=True)
     patient_name = serializers.CharField(source="patient.profile.full_name", read_only=True)
     hospital_name = serializers.CharField(source="selected_hospital.name", read_only=True, default=None)
+    hospital_suggestions = HospitalSuggestionSerializer(many=True, read_only=True)
 
     class Meta:
         model = Emergency
@@ -83,6 +101,7 @@ class EmergencyDetailSerializer(serializers.ModelSerializer):
             "notes",
             "eta_minutes",
             "distance_km",
+            "hospital_suggestions",
             "is_resolved",
             "completed_at",
             "created_at",

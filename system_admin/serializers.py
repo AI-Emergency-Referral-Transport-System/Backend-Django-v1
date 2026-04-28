@@ -21,11 +21,13 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
 class AdminHospitalProfileSerializer(serializers.ModelSerializer):
     user = AdminUserSerializer(read_only=True)
+    hospital_id = serializers.UUIDField(source="user.managed_hospital.id", read_only=True)
 
     class Meta:
         model = HospitalProfile
         fields = [
             "id",
+            "hospital_id",
             "user",
             "hospital_name",
             "address",

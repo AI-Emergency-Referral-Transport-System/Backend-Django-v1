@@ -13,6 +13,7 @@ from accounts.models import User
 from ambulances.models import Ambulance
 from emergencies.models import Emergency
 from hospitals.models import Hospital
+from tracking.models import Location_Track
 from tracking.serializers import EmergencySerializer
 
 class CreateEmergencyAPIView(APIView):
@@ -233,3 +234,94 @@ def assign_hospital_to_emergency(emergency, hospital):
             'patient_name': emergency.patient.name,
         }
     )
+
+
+class EmergencyTrackingDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, RolePermission]
+    allowed_roles = {User.Role.PATIENT, User.Role.DRIVER, User.Role.HOSPITAL_ADMIN, User.Role.ADMIN}
+
+    def get(self, request, emergency_id):
+        emergency = get_object_or_404(
+            Emergency.objects.select_related("patient", "assigned_ambulance", "selected_hospital"),
+            id=emergency_id,
+        )
+
+        latest_location = (
+            Location_Track.objects.filter(emergency=emergency)
+            .select_related("ambulance")
+            .order_by("-timestamp")
+            .first()
+        )
+
+        data = EmergencySerializer(emergency).data
+        data["assigned_ambulance_id"] = (
+            str(emergency.assigned_ambulance_id) if emergency.assigned_ambulance_id else None
+        )
+        data["latest_location"] = (
+            {
+                "ambulance_id": str(latest_location.ambulance_id),
+                "latitude": latest_location.coordinates.y,
+                "longitude": latest_location.coordinates.x,
+                "speed": latest_location.speed,
+                "heading": latest_location.heading,
+                "accuracy": latest_location.accuracy,
+                "timestamp": latest_location.timestamp.isoformat(),
+            }
+            if latest_location
+            else None
+        )
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class AmbulanceLatestLocationAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, RolePermission]
+    allowed_roles = {User.Role.PATIENT, User.Role.DRIVER, User.Role.HOSPITAL_ADMIN, User.Role.ADMIN}
+
+    def get(self, request, ambulance_id):
+        ambulance = get_object_or_404(Ambulance, id=ambulance_id)
+        latest_location = (
+            Location_Track.objects.filter(ambulance=ambulance)
+            .order_by("-timestamp")
+            .first()
+        )
+
+        if latest_location:
+            payload = {
+                "ambulance_id": str(ambulance.id),
+                "plate_number": ambulance.plate_number,
+                "status": ambulance.status,
+                "latitude": latest_location.coordinates.y,
+                "longitude": latest_location.coordinates.x,
+                "speed": latest_location.speed,
+                "heading": latest_location.heading,
+                "accuracy": latest_location.accuracy,
+                "timestamp": latest_location.timestamp.isoformat(),
+            }
+        elif getattr(ambulance, "current_location", None):
+            payload = {
+                "ambulance_id": str(ambulance.id),
+                "plate_number": ambulance.plate_number,
+                "status": ambulance.status,
+                "latitude": ambulance.current_location.y,
+                "longitude": ambulance.current_location.x,
+                "speed": None,
+                "heading": None,
+                "accuracy": None,
+                "timestamp": ambulance.last_location_update.isoformat()
+                if ambulance.last_location_update
+                else None,
+            }
+        else:
+            payload = {
+                "ambulance_id": str(ambulance.id),
+                "plate_number": ambulance.plate_number,
+                "status": ambulance.status,
+                "latitude": None,
+                "longitude": None,
+                "speed": None,
+                "heading": None,
+                "accuracy": None,
+                "timestamp": None,
+            }
+
+        return Response(payload, status=status.HTTP_200_OK)
