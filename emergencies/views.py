@@ -41,6 +41,24 @@ class EmergencyListCreateAPIView(generics.ListCreateAPIView):
             )
 
         data = request.data
+        pickup_latitude = data.get("pickup_latitude")
+        pickup_longitude = data.get("pickup_longitude")
+        if pickup_latitude is None or pickup_longitude is None:
+            return Response(
+                {
+                    "success": False,
+                    "errors": {"detail": "pickup_latitude and pickup_longitude are required."},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        selected_hospital = None
+        hospital_id = data.get("hospital_id")
+        if hospital_id:
+            from hospitals.models import Hospital
+
+            selected_hospital = get_object_or_404(Hospital, id=hospital_id, is_available=True)
+
         emergency = Emergency.objects.create(
             patient=request.user,
             emergency_type=data.get("emergency_type", "medical"),
@@ -48,11 +66,22 @@ class EmergencyListCreateAPIView(generics.ListCreateAPIView):
             status=Emergency.Status.PENDING,
             patient_description=data.get("description", ""),
             description=data.get("description", ""),
-            patient_location=Point(data.get("pickup_longitude"), data.get("pickup_latitude"), srid=4326)
-            if data.get("pickup_latitude") and data.get("pickup_longitude")
-            else None,
+            selected_hospital=selected_hospital,
+            patient_location=Point(float(pickup_longitude), float(pickup_latitude), srid=4326),
+            pickup_address=data.get("pickup_address", ""),
+            patient_name=data.get("patient_name", ""),
+            patient_age=data.get("patient_age"),
+            patient_condition=data.get("patient_condition", ""),
+            patient_phone=data.get("patient_phone", ""),
+            summary=data.get("summary", ""),
+            notes=data.get("notes", ""),
         )
         suggestions = self.hospital_selection_service.sync_emergency_suggestions(emergency)
+        if selected_hospital is not None:
+            selected_suggestion = self.hospital_selection_service.mark_selected_hospital(emergency, selected_hospital)
+            emergency.selected_hospital = selected_hospital
+            emergency.distance_km = selected_suggestion.distance_km
+            emergency.save()
         recommended_hospital = emergency.selected_hospital
 
         return Response(

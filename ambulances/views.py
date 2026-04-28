@@ -1,17 +1,26 @@
 from django.conf import settings
+from django.contrib.gis.geos import Point
+from django.core.mail import send_mail
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-
-from rest_framework import generics, status
-from rest_framework.views import APIView
+from rest_framework import generics, permissions, status
 from rest_framework.response import Response
-from rest_framework import permissions
+from rest_framework.views import APIView
 
-from accounts.models import DriverProfile
+from accounts.models import DriverProfile, User
 from accounts.profiles.services import ensure_profile_bundle
-from .models import Ambulance
-from .serializers import AmbulanceSerializer, AmbulanceStatusUpdateSerializer, DriverCreateSerializer
 from common.permissions import RolePermission
+
+from .models import Ambulance
+from .serializers import (
+    AmbulanceSerializer,
+    AmbulanceStatusUpdateSerializer,
+    DriverCreateSerializer,
+)
+
+
+def _get_managed_hospital(request):
+    return getattr(request.user, "managed_hospital", None)
 
 
 class AmbulanceListCreateAPIView(generics.ListCreateAPIView):
@@ -24,13 +33,12 @@ class AmbulanceListCreateAPIView(generics.ListCreateAPIView):
         if not settings.GIS_ENABLED:
             return Ambulance.objects.none()
         queryset = super().get_queryset()
-        status_param = self.request.query_params.get('status')
+        status_param = self.request.query_params.get("status")
         if status_param:
             queryset = queryset.filter(status=status_param)
         return queryset
 
 
-# Hospital Admin - Driver Management
 class DriverCreateAPIView(APIView):
     permission_classes = [RolePermission]
     allowed_roles = {"hospital_admin"}
@@ -40,14 +48,24 @@ class DriverCreateAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        from accounts.models import User
+        managed_hospital = _get_managed_hospital(request)
+        if managed_hospital is None:
+            return Response(
+                {"success": False, "errors": {"detail": ["Hospital profile not found for current admin."]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        email = data.get("email")
+        email = data["email"].lower()
         if User.objects.filter(email=email).exists():
             return Response(
                 {"success": False, "errors": {"email": ["Email already registered."]}},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        ambulance = None
+        ambulance_id = data.get("ambulance_id")
+        if ambulance_id:
+            ambulance = get_object_or_404(Ambulance, id=ambulance_id, hospital=managed_hospital)
 
         password = "xyz123"
         user = User.objects.create_user(
@@ -55,26 +73,30 @@ class DriverCreateAPIView(APIView):
             password=password,
             phone_number=data.get("phone"),
             role=User.Role.DRIVER,
+            is_verified=True,
         )
 
-        driver = DriverProfile.objects.create(
-            user=user,
-            license_number=data.get("license_number", ""),
-            license_expiry=data.get("license_expiry"),
-            experience_years=data.get("experience_years", 0),
-        )
+        profile = ensure_profile_bundle(user)
+        profile.full_name = data.get("name", "")
+        profile.save()
 
-        ambulance_id = data.get("ambulance_id")
-        if ambulance_id:
-            Ambulance.objects.filter(id=ambulance_id).update(driver=user)
+        driver = user.driver_profile
+        driver.license_number = data.get("license_number", "")
+        driver.license_expiry = data.get("license_expiry")
+        driver.experience_years = data.get("experience_years", 0)
+        driver.verification_status = DriverProfile.VerificationStatus.APPROVED
+        driver.save()
 
-        from django.core.mail import send_mail
+        if ambulance is not None:
+            ambulance.driver = user
+            ambulance.save(update_fields=["driver"])
 
         send_mail(
             subject="Your Driver Account",
             message=f"Your login credentials:\nEmail: {email}\nPassword: {password}",
-            from_email="no-reply@ai-emergency.local",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[email],
+            fail_silently=False,
         )
 
         return Response(
@@ -86,7 +108,7 @@ class DriverCreateAPIView(APIView):
                     "name": data.get("name", ""),
                     "email": email,
                     "license_number": data.get("license_number", ""),
-                    "verification_status": "approved",
+                    "verification_status": driver.verification_status,
                 },
                 "note": f"Password: {password} (sent to {email})",
             },
@@ -99,24 +121,46 @@ class DriverListAPIView(APIView):
     allowed_roles = {"hospital_admin"}
 
     def get(self, request):
-        drivers = DriverProfile.objects.select_related("user", "user__profile").order_by("-created_at")
+        managed_hospital = _get_managed_hospital(request)
+        if managed_hospital is None:
+            return Response(
+                {"success": True, "hospital": None, "hospital_name": "", "drivers": [], "count": 0},
+                status=status.HTTP_200_OK,
+            )
+
+        ambulances = Ambulance.objects.filter(
+            hospital=managed_hospital,
+            driver__isnull=False,
+        ).select_related("driver", "driver__profile")
+
         results = []
-        for d in drivers:
+        seen_driver_ids = set()
+        for ambulance in ambulances:
+            driver_user = ambulance.driver
+            if driver_user.id in seen_driver_ids:
+                continue
+            seen_driver_ids.add(driver_user.id)
+            driver_profile = getattr(driver_user, "driver_profile", None)
             results.append(
                 {
-                    "id": str(d.id),
-                    "name": d.user.full_name,
-                    "email": d.user.email,
-                    "phone": d.user.phone_number,
-                    "is_on_duty": d.is_on_duty,
-                    "verification_status": d.verification_status,
+                    "id": str(driver_profile.id) if driver_profile else None,
+                    "name": driver_user.full_name,
+                    "email": driver_user.email,
+                    "phone": driver_user.phone_number,
+                    "is_on_duty": driver_profile.is_on_duty if driver_profile else False,
+                    "verification_status": (
+                        driver_profile.verification_status
+                        if driver_profile
+                        else DriverProfile.VerificationStatus.PENDING
+                    ),
                 }
             )
+
         return Response(
             {
                 "success": True,
-                "hospital": None,
-                "hospital_name": "",
+                "hospital": str(managed_hospital.id),
+                "hospital_name": managed_hospital.name,
                 "drivers": results,
                 "count": len(results),
             },
@@ -129,7 +173,12 @@ class DriverDetailAPIView(APIView):
     allowed_roles = {"hospital_admin"}
 
     def put(self, request, driver_id):
-        driver = get_object_or_404(DriverProfile, id=driver_id)
+        managed_hospital = _get_managed_hospital(request)
+        driver = get_object_or_404(
+            DriverProfile.objects.select_related("user"),
+            id=driver_id,
+            user__ambulance_profile__hospital=managed_hospital,
+        )
         name = request.data.get("name")
         phone = request.data.get("phone")
 
@@ -139,7 +188,7 @@ class DriverDetailAPIView(APIView):
             profile.save()
         if phone:
             driver.user.phone_number = phone
-            driver.user.save()
+            driver.user.save(update_fields=["phone_number"])
 
         return Response(
             {"success": True, "message": "Driver updated successfully"},
@@ -147,7 +196,12 @@ class DriverDetailAPIView(APIView):
         )
 
     def delete(self, request, driver_id):
-        driver = get_object_or_404(DriverProfile, id=driver_id)
+        managed_hospital = _get_managed_hospital(request)
+        driver = get_object_or_404(
+            DriverProfile,
+            id=driver_id,
+            user__ambulance_profile__hospital=managed_hospital,
+        )
         driver.user.delete()
         return Response(
             {"success": True, "message": "Driver deleted successfully"},
@@ -155,12 +209,18 @@ class DriverDetailAPIView(APIView):
         )
 
 
-# Ambulance Management
 class AmbulanceCreateAPIView(APIView):
     permission_classes = [RolePermission]
     allowed_roles = {"hospital_admin"}
 
     def post(self, request):
+        managed_hospital = _get_managed_hospital(request)
+        if managed_hospital is None:
+            return Response(
+                {"success": False, "errors": {"detail": ["Hospital profile not found for current admin."]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         plate = request.data.get("plate_number")
         if Ambulance.objects.filter(plate_number=plate).exists():
             return Response(
@@ -170,9 +230,12 @@ class AmbulanceCreateAPIView(APIView):
 
         ambulance = Ambulance.objects.create(
             plate_number=plate,
-            organization=request.data.get("vehicle_model", ""),
+            ambulance_type=request.data.get("ambulance_type", Ambulance.AmbulanceType.BASIC),
+            vehicle_model=request.data.get("vehicle_model", ""),
             phone=request.data.get("phone", ""),
             equipment=request.data.get("equipment", []),
+            hospital=managed_hospital,
+            organization=managed_hospital.name,
         )
 
         return Response(
@@ -190,14 +253,17 @@ class AmbulanceListAPIView(APIView):
     allowed_roles = {"hospital_admin"}
 
     def get(self, request):
-        ambulances = Ambulance.objects.order_by("-created_at")
+        managed_hospital = _get_managed_hospital(request)
+        ambulances = Ambulance.objects.filter(hospital=managed_hospital).order_by("-created_at")
         results = []
-        for a in ambulances:
+        for ambulance in ambulances:
             results.append(
                 {
-                    "id": str(a.id),
-                    "plate_number": a.plate_number,
-                    "status": a.status,
+                    "id": str(ambulance.id),
+                    "plate_number": ambulance.plate_number,
+                    "status": ambulance.status,
+                    "ambulance_type": ambulance.ambulance_type,
+                    "vehicle_model": ambulance.vehicle_model,
                 }
             )
         return Response(
@@ -210,7 +276,6 @@ class AmbulanceListAPIView(APIView):
         )
 
 
-# Driver App Endpoints
 class DriverDashboardAPIView(APIView):
     permission_classes = [RolePermission]
     allowed_roles = {"driver"}
@@ -244,7 +309,7 @@ class DriverDashboardAPIView(APIView):
                 ),
                 "stats": {
                     "today_trips": 0,
-                    "completed_trips": 0,
+                    "completed_trips": driver.completed_trips,
                     "is_online": driver.is_on_duty,
                 },
                 "active_emergency": None,
@@ -265,15 +330,25 @@ class DriverGoOnlineAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        is_online = request.data.get("online", True)
+        is_online = bool(request.data.get("online", True))
         lat = request.data.get("latitude")
         lng = request.data.get("longitude")
 
-        driver.availability = "online" if is_online else "offline"
+        driver.availability = (
+            DriverProfile.Availability.ONLINE if is_online else DriverProfile.Availability.OFFLINE
+        )
         driver.is_on_duty = is_online
         driver.save(update_fields=["availability", "is_on_duty"])
 
         ambulance = Ambulance.objects.filter(driver=request.user).first()
+        if ambulance:
+            ambulance.status = Ambulance.Status.AVAILABLE if is_online else Ambulance.Status.OFFLINE
+            update_fields = ["status"]
+            if settings.GIS_ENABLED and lat is not None and lng is not None:
+                ambulance.current_location = Point(float(lng), float(lat), srid=4326)
+                ambulance.last_location_update = timezone.now()
+                update_fields.extend(["current_location", "last_location_update"])
+            ambulance.save(update_fields=update_fields)
 
         return Response(
             {
@@ -300,6 +375,21 @@ class DriverLocationAPIView(APIView):
     def post(self, request):
         lat = request.data.get("latitude")
         lng = request.data.get("longitude")
+        if lat is None or lng is None:
+            return Response(
+                {"success": False, "errors": {"detail": "latitude and longitude are required."}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ambulance = Ambulance.objects.filter(driver=request.user).first()
+        if ambulance and settings.GIS_ENABLED:
+            ambulance.current_location = Point(float(lng), float(lat), srid=4326)
+            ambulance.last_location_update = timezone.now()
+            ambulance.save(update_fields=["current_location", "last_location_update"])
+
+        request.user.latitude = float(lat)
+        request.user.longitude = float(lng)
+        request.user.save(update_fields=["latitude", "longitude"])
 
         return Response(
             {"success": True, "message": "Location updated"},
@@ -320,18 +410,20 @@ class DriverPendingRequestsAPIView(APIView):
 
         from emergencies.models import Emergency
 
-        pending = Emergency.objects.filter(
-            status=Emergency.Status.PENDING,
-        ).order_by("-created_at")[:10]
+        ambulance = Ambulance.objects.filter(driver=request.user).select_related("hospital").first()
+        pending = Emergency.objects.filter(status=Emergency.Status.PENDING).order_by("-created_at")
+        if ambulance and ambulance.hospital_id:
+            pending = pending.filter(selected_hospital_id=ambulance.hospital_id)
+        pending = pending[:10]
 
         results = []
-        for e in pending:
+        for emergency in pending:
             results.append(
                 {
-                    "id": str(e.id),
-                    "emergency_type": e.emergency_type,
-                    "priority": e.priority,
-                    "pickup_address": "",
+                    "id": str(emergency.id),
+                    "emergency_type": emergency.emergency_type,
+                    "priority": emergency.priority,
+                    "pickup_address": emergency.pickup_address,
                 }
             )
 
@@ -365,7 +457,8 @@ class DriverAcceptEmergencyAPIView(APIView):
 
         emergency.assigned_ambulance = ambulance
         emergency.status = Emergency.Status.ACCEPTED
-        emergency.save(update_fields=["assigned_ambulance", "status"])
+        emergency.dispatched_at = timezone.now()
+        emergency.save(update_fields=["assigned_ambulance", "status", "dispatched_at"])
 
         ambulance.status = Ambulance.Status.EN_ROUTE
         ambulance.save(update_fields=["status"])
@@ -387,23 +480,37 @@ class DriverEmergencyActionAPIView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        action = request.data.get("action")
         from emergencies.models import Emergency
 
-        emergency = get_object_or_404(Emergency, id=emergency_id)
+        action = request.data.get("action")
+        emergency = get_object_or_404(Emergency, id=emergency_id, assigned_ambulance__driver=request.user)
+        ambulance = emergency.assigned_ambulance
 
         if action == "arrived":
-            emergency.status = Emergency.Status.ACCEPTED
+            emergency.status = Emergency.Status.DRIVER_ARRIVED
+            ambulance.status = Ambulance.Status.BUSY
+            ambulance.save(update_fields=["status"])
+            emergency.save(update_fields=["status"])
         elif action == "picked_up":
             emergency.status = Emergency.Status.RETRIEVED
+            emergency.save(update_fields=["status"])
         elif action == "en_route_hospital":
-            emergency.status = Emergency.Status.IN_PROGRESS
+            emergency.status = Emergency.Status.GOING_TO_HOSPITAL
+            emergency.save(update_fields=["status"])
         elif action == "arrived_hospital":
-            emergency.status = Emergency.Status.IN_PROGRESS
-        elif action == "complete":
             emergency.status = Emergency.Status.DELIVERED
+            emergency.save(update_fields=["status"])
+        elif action == "complete":
+            emergency.mark_completed()
+            if ambulance:
+                ambulance.status = Ambulance.Status.AVAILABLE
+                ambulance.save(update_fields=["status"])
+        else:
+            return Response(
+                {"success": False, "errors": {"action": ["Invalid action."]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        emergency.save()
         return Response(
             {"success": True, "message": f"Action '{action}' completed"},
             status=status.HTTP_200_OK,

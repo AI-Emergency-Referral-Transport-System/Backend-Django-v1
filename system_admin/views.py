@@ -50,13 +50,10 @@ class AdminDashboardAPIView(APIView):
         if settings.GIS_ENABLED:
             try:
                 from emergencies.models import Emergency
+                completed_statuses = [Emergency.Status.DELIVERED, Emergency.Status.COMPLETED]
                 data["total_emergencies"] = Emergency.objects.count()
-                data["active_emergencies"] = Emergency.objects.exclude(
-                    status=Emergency.Status.DELIVERED
-                ).count()
-                data["completed_emergencies"] = Emergency.objects.filter(
-                    status=Emergency.Status.DELIVERED
-                ).count()
+                data["active_emergencies"] = Emergency.objects.exclude(status__in=completed_statuses).count()
+                data["completed_emergencies"] = Emergency.objects.filter(status__in=completed_statuses).count()
             except Exception:
                 data["total_emergencies"] = 0
                 data["active_emergencies"] = 0

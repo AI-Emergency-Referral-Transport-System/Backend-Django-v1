@@ -1,27 +1,47 @@
+import secrets
+from datetime import timedelta
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.tokens import default_token_generator
+from django.core.mail import send_mail
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import permissions, response, status
 from rest_framework.exceptions import ValidationError
-from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.profiles.serializers import ProfileSerializer
 from accounts.profiles.services import ensure_profile_bundle
 from accounts.serializers import (
     ChangePasswordSerializer,
+    EmergencyContactSerializer,
     ForgotPasswordSerializer,
-    LoginSerializer,
     LocationUpdateSerializer,
+    LoginSerializer,
     OTPRequestSerializer,
     OTPVerifySerializer,
     PatientRegistrationSerializer,
     ResetPasswordSerializer,
     UserSerializer,
+    VerifyEmailSerializer,
 )
 from accounts.services.otp_service import OTPService
 
 
 User = get_user_model()
+
+
+def _normalize_gender(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = value.strip().lower()
+    mapping = {
+        "male": User.Gender.MALE,
+        "female": User.Gender.FEMALE,
+        "other": User.Gender.OTHER,
+    }
+    return mapping.get(normalized, "")
 
 
 class PatientRegistrationAPIView(APIView):
@@ -45,6 +65,10 @@ class PatientRegistrationAPIView(APIView):
             password=data["password"],
             phone_number=data.get("phone"),
             role=User.Role.PATIENT,
+            name=data.get("name", ""),
+            age=data.get("age"),
+            gender=_normalize_gender(data.get("gender")),
+            is_verified=True,
         )
 
         profile = ensure_profile_bundle(user)
@@ -126,14 +150,17 @@ class ForgotPasswordAPIView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        token = default_token_generator.make_token(user)
-        from django.core.mail import send_mail
+        token = secrets.token_urlsafe(24)
+        user.password_reset_token = token
+        user.password_reset_expires = timezone.now() + timedelta(minutes=30)
+        user.save(update_fields=["password_reset_token", "password_reset_expires"])
 
         send_mail(
             subject="Password Reset",
             message=f"Your password reset token: {token}",
-            from_email="no-reply@ai-emergency.local",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[email],
+            fail_silently=False,
         )
 
         return response.Response(
@@ -155,15 +182,20 @@ class ResetPasswordAPIView(APIView):
         data = serializer.validated_data
         token = data["token"]
 
-        user = User.objects.filter(email__isnull=False).first()
-        if user is None or not default_token_generator.check_token(user, token):
+        user = User.objects.filter(
+            password_reset_token=token,
+            password_reset_expires__gt=timezone.now(),
+        ).first()
+        if user is None:
             return response.Response(
                 {"success": False, "errors": {"token": ["Invalid or expired token."]}},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         user.set_password(data["new_password"])
-        user.save()
+        user.password_reset_token = ""
+        user.password_reset_expires = None
+        user.save(update_fields=["password", "password_reset_token", "password_reset_expires"])
 
         return response.Response(
             {
@@ -191,7 +223,7 @@ class ChangePasswordAPIView(APIView):
             )
 
         user.set_password(data["new_password"])
-        user.save()
+        user.save(update_fields=["password"])
 
         return response.Response(
             {"success": True, "message": "Password changed successfully"},
@@ -203,12 +235,24 @@ class VerifyEmailAPIView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        from accounts.serializers import VerifyEmailSerializer
-
         serializer = VerifyEmailSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         token = serializer.validated_data["token"]
+        user = User.objects.filter(
+            verification_token=token,
+            verification_token_expires__gt=timezone.now(),
+        ).first()
+        if user is None:
+            return response.Response(
+                {"success": False, "errors": {"token": ["Invalid or expired token."]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.is_verified = True
+        user.verification_token = ""
+        user.verification_token_expires = None
+        user.save(update_fields=["is_verified", "verification_token", "verification_token_expires"])
         return response.Response(
             {"success": True, "message": "Email verified successfully"},
             status=status.HTTP_200_OK,
@@ -217,21 +261,17 @@ class VerifyEmailAPIView(APIView):
 
 class ProfileRetrieveUpdateAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    renderer_classes = [permissions.AllowAny]
 
     def get(self, request):
-        profile = request.user.profile
-        return response.Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
+        profile = ensure_profile_bundle(request.user)
+        return response.Response(ProfileSerializer(profile).data, status=status.HTTP_200_OK)
 
     def patch(self, request):
-        profile = request.user.profile
-        serializer = ProfileSerializer(profile, data=request.data, partial=True)
+        profile = ensure_profile_bundle(request.user)
+        serializer = ProfileSerializer(profile, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return response.Response(
-            {"success": True, "message": "Profile updated successfully"},
-            status=status.HTTP_200_OK,
-        )
+        return response.Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class UpdateLocationAPIView(APIView):
@@ -240,6 +280,10 @@ class UpdateLocationAPIView(APIView):
     def post(self, request):
         serializer = LocationUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        request.user.latitude = serializer.validated_data["latitude"]
+        request.user.longitude = serializer.validated_data["longitude"]
+        request.user.save(update_fields=["latitude", "longitude"])
 
         return response.Response(
             {"success": True, "message": "Location updated successfully"},
@@ -251,21 +295,21 @@ class EmergencyContactsListCreateAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        from accounts.models import EmergencyContact
-
-        contacts = EmergencyContact.objects.filter(user=request.user)
-        from accounts.serializers import EmergencyContactSerializer
-
+        contacts = request.user.emergency_contacts.all()
         serializer = EmergencyContactSerializer(contacts, many=True)
         return response.Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
-        from accounts.models import EmergencyContact
-        from accounts.serializers import EmergencyContactSerializer
-
         serializer = EmergencyContactSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(user=request.user)
+
+        is_primary = serializer.validated_data.get("is_primary", False)
+        if is_primary:
+            request.user.emergency_contacts.update(is_primary=False)
+        elif not request.user.emergency_contacts.exists():
+            is_primary = True
+
+        serializer.save(user=request.user, is_primary=is_primary)
         return response.Response(
             {"success": True, "message": "Contact created successfully"},
             status=status.HTTP_201_CREATED,
@@ -276,10 +320,7 @@ class EmergencyContactDetailAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def delete(self, request, contact_id):
-        from accounts.models import EmergencyContact
-        from django.shortcuts import get_object_or_404
-
-        contact = get_object_or_404(EmergencyContact, id=contact_id, user=request.user)
+        contact = get_object_or_404(request.user.emergency_contacts.all(), id=contact_id)
         contact.delete()
         return response.Response(
             {"success": True, "message": "Contact deleted successfully"},
@@ -298,7 +339,7 @@ class OTPRequestAPIView(APIView):
             email=serializer.validated_data["email"],
             defaults={"role": User.Role.PATIENT},
         )
-        profile = ensure_profile_bundle(user)
+        ensure_profile_bundle(user)
         OTPService().request_otp(user)
 
         return response.Response(
