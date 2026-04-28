@@ -14,7 +14,7 @@ SECRET_KEY = os.getenv(
 DEBUG = os.getenv("DJANGO_DEBUG", "True").strip().lower() == "true"
 ALLOWED_HOSTS = [
     host.strip()
-    for host in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",")
+    for host in os.getenv("DJANGO_ALLOWED_HOSTS", " ").split(",")
     if host.strip()
 ]
 
