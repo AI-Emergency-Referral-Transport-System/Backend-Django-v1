@@ -1,13 +1,13 @@
-from django.contrib.gis.geos import Point
-from django.contrib.gis.db.models.functions import Distance
-from django.shortcuts import get_object_or_404
 from django.conf import settings
-
-from rest_framework import generics, status
+from django.contrib.gis.db.models.functions import Distance
+from django.contrib.gis.geos import Point
+from django.shortcuts import get_object_or_404
+from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.permissions import RolePermission
+from hospitals.models import Hospital
 from hospitals.serializers import (
     HospitalListSerializer,
     HospitalRegistrationSerializer,
@@ -17,19 +17,25 @@ from hospitals.serializers import (
 )
 
 
+def _require_gis_response():
+    return Response(
+        {"error": "Hospitals not available - GDAL required."},
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
 class HospitalRootAPIView(APIView):
-    permission_classes = [RolePermission]
-    allowed_roles = {"patient", "driver", "hospital_admin"}
+    permission_classes = [permissions.AllowAny]
 
     def get(self, request):
         return Response(
             {
                 "message": "Hospitals API is available.",
                 "endpoints": {
-                    "list": "/api/v1/hospitals/",
-                    "register": "/api/v1/hospitals/register/",
-                    "nearby": "/api/v1/hospitals/nearby/",
-                    "resources": "/api/v1/hospitals/{id}/resources/",
+                    "list": "/api/hospitals/",
+                    "register": "/api/hospitals/register/",
+                    "nearby": "/api/hospitals/nearby/",
+                    "resources": "/api/hospitals/{id}/resources/",
                 },
             },
             status=status.HTTP_200_OK,
@@ -37,47 +43,51 @@ class HospitalRootAPIView(APIView):
 
 
 class HospitalListCreateAPIView(generics.ListCreateAPIView):
-    queryset = None
+    queryset = Hospital.objects.all()
     serializer_class = HospitalListSerializer
-    permission_classes = [RolePermission]
-    allowed_roles = {"patient", "driver", "hospital_admin"}
+
+    def get_permissions(self):
+        if self.request.method in {"GET", "POST"}:
+            return [permissions.AllowAny()]
+        return [RolePermission()]
 
     def get_queryset(self):
-        from hospitals.models import Hospital
-
         if not settings.GIS_ENABLED:
-            return Response(
-                {"error": "Hospitals not available - GDAL required."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+            return Hospital.objects.none()
         return Hospital.objects.all()
 
     def list(self, request):
-        from hospitals.models import Hospital
+        if not settings.GIS_ENABLED:
+            return _require_gis_response()
 
-        queryset = Hospital.objects.all()
+        queryset = self.get_queryset()
         city = request.query_params.get("city")
         specialty = request.query_params.get("specialty")
+        has_emergency = request.query_params.get("has_emergency")
         search = request.query_params.get("search")
 
         if city:
-            queryset = queryset.filter(address__icontains=city)
+            queryset = queryset.filter(city__icontains=city)
         if specialty == "emergency":
-            queryset = queryset.filter(has_trauma=True)
+            queryset = queryset.filter(has_emergency=True)
+        if has_emergency is not None:
+            has_emergency_bool = str(has_emergency).lower() in {"1", "true", "yes", "on"}
+            queryset = queryset.filter(has_emergency=has_emergency_bool)
         if search:
-            queryset = queryset.filter(name__icontains=search) | queryset.filter(
-                address__icontains=search
-            )
+            queryset = queryset.filter(name__icontains=search) | queryset.filter(address__icontains=search)
 
-        serializer = HospitalListSerializer(queryset, many=True)
+        serializer = HospitalListSerializer(queryset.order_by("name"), many=True)
         return Response(
             {"count": queryset.count(), "results": serializer.data},
             status=status.HTTP_200_OK,
         )
 
     def create(self, request):
-        from hospitals.models import Hospital
-        from accounts.models import User, HospitalProfile
+        if not settings.GIS_ENABLED:
+            return _require_gis_response()
+
+        from accounts.models import HospitalProfile, User
+        from accounts.profiles.services import ensure_profile_bundle
 
         serializer = HospitalRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -96,29 +106,51 @@ class HospitalListCreateAPIView(generics.ListCreateAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if data.get("latitude") is None or data.get("longitude") is None:
+            return Response(
+                {"success": False, "errors": {"location": ["latitude and longitude are required."]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         user = User.objects.create_user(
             email=admin_email,
             password=data.get("admin_password", "password123"),
+            phone_number=data.get("phone", ""),
             role=User.Role.HOSPITAL_ADMIN,
+            name=data["name"],
         )
+        ensure_profile_bundle(user)
 
-        HospitalProfile.objects.create(
+        HospitalProfile.objects.update_or_create(
             user=user,
-            hospital_name=data["name"],
-            address=data.get("address", ""),
-            available_beds=data.get("total_beds", 0),
+            defaults={
+                "hospital_name": data["name"],
+                "address": data.get("address", ""),
+                "available_beds": data.get("total_beds", 0),
+                "icu_available": data.get("has_icu", False),
+                "oxygen_level": HospitalProfile.OxygenLevel.HIGH,
+                "services": [],
+            },
         )
 
-        location = None
-        if data.get("latitude") and data.get("longitude"):
-            location = Point(data["longitude"], data["latitude"], srid=4326)
+        location = Point(float(data["longitude"]), float(data["latitude"]), srid=4326)
 
         hospital = Hospital.objects.create(
             name=data["name"],
+            facility_type=data.get("facility_type", Hospital.FacilityType.HOSPITAL),
+            address=data.get("address", ""),
+            city=data.get("city", ""),
             phone=data.get("phone", ""),
+            email=data.get("email", ""),
             admin=user,
             location=location,
+            total_beds=data.get("total_beds", 0),
             available_beds=data.get("total_beds", 0),
+            total_icu_beds=data.get("total_icu_beds", 0),
+            available_icu_beds=data.get("total_icu_beds", 0),
+            has_emergency=data.get("has_emergency", False),
+            has_icu=data.get("has_icu", False),
+            has_surgery=data.get("has_surgery", False),
         )
 
         return Response(
@@ -133,39 +165,36 @@ class HospitalListCreateAPIView(generics.ListCreateAPIView):
 
 
 class HospitalDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = None
+    queryset = Hospital.objects.all()
     serializer_class = HospitalSerializer
-    permission_classes = [RolePermission]
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated(), RolePermission()]
+
     allowed_roles = {"hospital_admin"}
 
     def get_queryset(self):
-        from hospitals.models import Hospital
-
         return Hospital.objects.all()
 
     def retrieve(self, request, pk=None):
-        from hospitals.models import Hospital
-        from django.shortcuts import get_object_or_404
+        if not settings.GIS_ENABLED:
+            return _require_gis_response()
 
         hospital = get_object_or_404(Hospital, id=pk)
         serializer = HospitalSerializer(hospital)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def update(self, request, pk=None):
-        from hospitals.models import Hospital
-        from django.shortcuts import get_object_or_404
-
-        hospital = get_object_or_404(Hospital, id=pk)
+        hospital = get_object_or_404(Hospital, id=pk, admin=request.user)
         serializer = HospitalSerializer(hospital, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def destroy(self, request, pk=None):
-        from hospitals.models import Hospital
-        from django.shortcuts import get_object_or_404
-
-        hospital = get_object_or_404(Hospital, id=pk)
+        hospital = get_object_or_404(Hospital, id=pk, admin=request.user)
         hospital.delete()
         return Response(
             {"success": True, "message": "Hospital deleted successfully"},
@@ -174,18 +203,13 @@ class HospitalDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
 
 
 class HospitalNearbyAPIView(APIView):
-    permission_classes = [RolePermission]
-    allowed_roles = {"patient", "driver", "hospital_admin"}
+    permission_classes = [permissions.AllowAny]
 
     def get(self, request):
         from django.contrib.gis.measure import D
-        from hospitals.models import Hospital
 
         if not settings.GIS_ENABLED:
-            return Response(
-                {"error": "Nearby hospitals not available - GDAL required."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+            return _require_gis_response()
 
         try:
             lat = float(request.query_params.get("latitude"))
@@ -209,15 +233,15 @@ class HospitalNearbyAPIView(APIView):
         )
 
         results = []
-        for h in hospitals:
+        for hospital in hospitals:
             results.append(
                 {
-                    "id": str(h.id),
-                    "name": h.name,
-                    "facility_type": "hospital",
-                    "distance_km": round(h.distance.km, 2) if hasattr(h, "distance") else None,
-                    "available_beds": h.available_beds,
-                    "has_emergency": h.has_trauma,
+                    "id": str(hospital.id),
+                    "name": hospital.name,
+                    "facility_type": hospital.facility_type,
+                    "distance_km": round(hospital.distance.km, 2) if hasattr(hospital, "distance") else None,
+                    "available_beds": hospital.available_beds,
+                    "has_emergency": hospital.has_emergency,
                 }
             )
 
@@ -225,22 +249,23 @@ class HospitalNearbyAPIView(APIView):
 
 
 class HospitalResourceAPIView(APIView):
-    permission_classes = [RolePermission]
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated(), RolePermission()]
+
     allowed_roles = {"hospital_admin"}
 
     def get(self, request, hospital_id):
-        from hospitals.models import Hospital
-        from django.shortcuts import get_object_or_404
+        if not settings.GIS_ENABLED:
+            return _require_gis_response()
 
         hospital = get_object_or_404(Hospital, id=hospital_id)
         serializer = HospitalResourceSerializer(hospital)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, hospital_id):
-        from hospitals.models import Hospital
-        from django.shortcuts import get_object_or_404
-
-        hospital = get_object_or_404(Hospital, id=hospital_id)
+        hospital = get_object_or_404(Hospital, id=hospital_id, admin=request.user)
         serializer = HospitalResourceUpdateSerializer(hospital, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
