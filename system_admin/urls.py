@@ -15,6 +15,9 @@ from system_admin.views import (
 
 urlpatterns = [
     path("dashboard/", AdminDashboardAPIView.as_view(), name="admin-dashboard"),
+    path("pending-hospitals/", AdminPendingHospitalsAPIView.as_view(), name="admin-pending-hospitals-doc"),
+    path("hospital/<uuid:hospital_id>/approve/", AdminApproveHospitalAPIView.as_view(), name="admin-approve-hospital-doc"),
+    path("hospital/<uuid:hospital_id>/reject/", AdminRejectHospitalAPIView.as_view(), name="admin-reject-hospital-doc"),
     path("hospitals/pending/", AdminPendingHospitalsAPIView.as_view(), name="admin-pending-hospitals"),
     path("hospitals/approve/<uuid:hospital_profile_id>/", AdminApproveHospitalAPIView.as_view(), name="admin-approve-hospital"),
     path("hospitals/reject/<uuid:hospital_profile_id>/", AdminRejectHospitalAPIView.as_view(), name="admin-reject-hospital"),

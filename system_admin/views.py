@@ -1,4 +1,5 @@
 from django.shortcuts import get_object_or_404
+from django.http import Http404
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -10,6 +11,21 @@ from system_admin.serializers import (
     AdminHospitalProfileSerializer,
 )
 from common.permissions import RolePermission
+
+
+def _resolve_hospital_profile(*, hospital_profile_id=None, hospital_id=None):
+    if hospital_profile_id is not None:
+        return get_object_or_404(HospitalProfile, id=hospital_profile_id)
+
+    if hospital_id is not None:
+        from hospitals.models import Hospital
+
+        hospital = get_object_or_404(Hospital.objects.select_related("admin"), id=hospital_id)
+        if hospital.admin is None:
+            raise Http404("Hospital admin profile not found.")
+        return get_object_or_404(HospitalProfile, user=hospital.admin)
+
+    raise Http404("Hospital profile not found.")
 
 
 class AdminDashboardAPIView(APIView):
@@ -71,9 +87,10 @@ class AdminApproveHospitalAPIView(APIView):
     permission_classes = [RolePermission]
     allowed_roles = {"admin"}
 
-    def post(self, request, hospital_profile_id):
-        hospital_profile = get_object_or_404(
-            HospitalProfile, id=hospital_profile_id
+    def post(self, request, hospital_profile_id=None, hospital_id=None):
+        hospital_profile = _resolve_hospital_profile(
+            hospital_profile_id=hospital_profile_id,
+            hospital_id=hospital_id,
         )
 
         if hospital_profile.registration_status != HospitalProfile.RegistrationStatus.PENDING:
@@ -99,9 +116,10 @@ class AdminRejectHospitalAPIView(APIView):
     permission_classes = [RolePermission]
     allowed_roles = {"admin"}
 
-    def post(self, request, hospital_profile_id):
-        hospital_profile = get_object_or_404(
-            HospitalProfile, id=hospital_profile_id
+    def post(self, request, hospital_profile_id=None, hospital_id=None):
+        hospital_profile = _resolve_hospital_profile(
+            hospital_profile_id=hospital_profile_id,
+            hospital_id=hospital_id,
         )
 
         if hospital_profile.registration_status != HospitalProfile.RegistrationStatus.PENDING:

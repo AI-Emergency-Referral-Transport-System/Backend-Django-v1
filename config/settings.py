@@ -73,7 +73,6 @@ if GIS_ENABLED:
         "emergencies",
         "hospitals",
         "ambulances",
-        "ai",
     ]
 
 # --- 3. AUTH & USER CONFIG ---

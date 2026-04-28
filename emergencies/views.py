@@ -14,12 +14,14 @@ from emergencies.serializers import (
     EmergencySelectHospitalSerializer,
     EmergencyNotesUpdateSerializer,
 )
+from hospitals.services import HospitalSelectionService
 
 
 class EmergencyListCreateAPIView(generics.ListCreateAPIView):
     serializer_class = EmergencySerializer
     permission_classes = [RolePermission]
     allowed_roles = {"patient", "driver", "hospital_admin"}
+    hospital_selection_service = HospitalSelectionService()
 
     def get_queryset(self):
         if not settings.GIS_ENABLED:
@@ -43,17 +45,40 @@ class EmergencyListCreateAPIView(generics.ListCreateAPIView):
             patient=request.user,
             emergency_type=data.get("emergency_type", "medical"),
             priority=data.get("priority", "medium"),
+            status=Emergency.Status.PENDING,
             patient_description=data.get("description", ""),
+            description=data.get("description", ""),
             patient_location=Point(data.get("pickup_longitude"), data.get("pickup_latitude"), srid=4326)
             if data.get("pickup_latitude") and data.get("pickup_longitude")
             else None,
         )
+        suggestions = self.hospital_selection_service.sync_emergency_suggestions(emergency)
+        recommended_hospital = emergency.selected_hospital
 
         return Response(
             {
                 "success": True,
                 "message": "Emergency created successfully",
                 "emergency_id": str(emergency.id),
+                "recommended_hospital": (
+                    {
+                        "id": str(recommended_hospital.id),
+                        "name": recommended_hospital.name,
+                    }
+                    if recommended_hospital
+                    else None
+                ),
+                "hospital_suggestions": [
+                    {
+                        "hospital_id": str(suggestion.hospital_id),
+                        "hospital_name": suggestion.hospital.name,
+                        "distance_km": suggestion.distance_km,
+                        "score": suggestion.score,
+                        "reason": suggestion.reason,
+                        "is_selected": suggestion.is_selected,
+                    }
+                    for suggestion in suggestions
+                ],
             },
             status=status.HTTP_201_CREATED,
         )
@@ -108,6 +133,7 @@ class EmergencyMyListAPIView(APIView):
 class EmergencySelectHospitalAPIView(APIView):
     permission_classes = [RolePermission]
     allowed_roles = {"patient"}
+    hospital_selection_service = HospitalSelectionService()
 
     def post(self, request, pk):
         if not settings.GIS_ENABLED:
@@ -133,8 +159,10 @@ class EmergencySelectHospitalAPIView(APIView):
             Hospital, id=serializer.validated_data["hospital_id"], is_available=True
         )
 
+        suggestion = self.hospital_selection_service.mark_selected_hospital(emergency, hospital)
         emergency.selected_hospital = hospital
-        emergency.save(update_fields=["selected_hospital"])
+        emergency.distance_km = suggestion.distance_km
+        emergency.save()
 
         return Response(
             {"success": True, "message": f"Hospital '{hospital.name}' selected."},
