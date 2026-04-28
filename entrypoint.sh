@@ -11,4 +11,4 @@ echo "Creating admin user..."
 python manage.py create_admin
 
 echo "Starting Gunicorn..."
-exec gunicorn config.asgi:application --bind 0.0.0.0:$PORT
+exec gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
