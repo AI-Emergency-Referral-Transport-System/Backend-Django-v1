@@ -11,7 +11,7 @@ websocket_urlpatterns = [
 
     # 2. For the Driver (Receiving new mission alerts)
     re_path(
-        r'ws/dispatch/(?P<ambulance_id>\d+)/$', 
+       r'ws/dispatch/(?P<ambulance_id>[0-9a-f-]+)/$',
         consumers.DispatchConsumer.as_asgi()
     ),
 
